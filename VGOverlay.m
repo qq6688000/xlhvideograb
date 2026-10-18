@@ -146,7 +146,7 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
     [nc addObserver:self selector:@selector(onMediaChangedNote:) name:VGMediaDidChangeNotification object:nil];
     [nc addObserver:self selector:@selector(onAppActiveNote:) name:UIApplicationDidBecomeActiveNotification object:nil];
-    [nc addObserver:self selector:@selector(onOrientationChanged:) name:UIApplicationDidChangeStatusBarOrientationNotification object:nil];
+    [nc addObserver:self selector:@selector(onOrientationChanged:) name:UIDeviceOrientationDidChangeNotification object:nil];
     [nc addObserver:self selector:@selector(onOrientationChanged:) name:UIDeviceOrientationDidChangeNotification object:nil];
 }
 
