@@ -257,6 +257,9 @@ static NSHashTable *sInjectedControllers(void) {
     // 例外是 Telegram 系——它走标准 AVPlayer，风险低，默认允许出球
     if (!webView && !VGConfigBool(@"native", NO) && !VGIsTelegramBundle()) return;
 
+    VGLogLine([NSString stringWithFormat:@"[attach] win=%@ level=%.0f webview=%@",
+               NSStringFromClass([win class]), win.windowLevel, webView ? @"y" : @"n"]);
+
     VGOverlayController *overlay = [VGOverlayController controllerForWindow:win];
     if (!overlay) return;
     if (webView) [overlay bindWebView:webView];

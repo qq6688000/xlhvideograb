@@ -12,6 +12,7 @@
 #import "VGManager.h"
 #import "VGDownloader.h"
 #import <objc/runtime.h>
+#import <QuartzCore/QuartzCore.h>
 
 #pragma mark - 触摸穿透容器
 
@@ -88,7 +89,7 @@
 
 static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
 
-@interface VGOverlayController () <UITableViewDataSource, UITableViewDelegate>
+@interface VGOverlayController () <UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate>
 
 @property (nonatomic, weak) UIWindow *window;
 @property (nonatomic, weak) WKWebView *webView;
@@ -108,6 +109,8 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
 @property (nonatomic, strong) NSArray<VGMediaItem *> *items;
 @property (nonatomic, assign) BOOL panelVisible;
 @property (nonatomic, assign) BOOL dragging;
+@property (nonatomic, assign) CGFloat dragDistance;
+@property (nonatomic, assign) NSTimeInterval lastDragEndTime;
 
 @end
 
@@ -218,13 +221,24 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
     [fab setTitle:@"抓" forState:UIControlStateNormal];
     [fab setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     fab.titleLabel.font = [UIFont boldSystemFontOfSize:19];
-    [fab addTarget:self action:@selector(fabTapped) forControlEvents:UIControlEventTouchUpInside];
+    fab.exclusiveTouch = YES;
+
+    // 不用 UIControl 的 touchUpInside：pan 手势一旦识别就会取消它，
+    // 在自带复杂手势的 App 里点击会静默失效。改用显式 tap。
+    UITapGestureRecognizer *tap =
+        [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleFABTap:)];
+    tap.delegate = self;
+    [fab addGestureRecognizer:tap];
 
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
+    pan.delegate = self;
+    pan.cancelsTouchesInView = NO;
     [fab addGestureRecognizer:pan];
 
     UILongPressGestureRecognizer *press = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
     press.minimumPressDuration = 0.6;
+    press.delegate = self;
+    press.cancelsTouchesInView = NO;
     [fab addGestureRecognizer:press];
 
     [self.root addSubview:fab];
@@ -251,10 +265,27 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)g {
-    if (!self.fab) return;
+    if (!self.fab || !self.root) return;
+
     CGPoint t = [g translationInView:self.root];
     [g setTranslation:CGPointZero inView:self.root];
-    if (fabs(t.x) > 0.5 || fabs(t.y) > 0.5) self.dragging = YES;
+
+    if (g.state == UIGestureRecognizerStateBegan) {
+        self.dragDistance = 0;
+        self.dragging = NO;
+    }
+    self.dragDistance += (CGFloat)(fabs(t.x) + fabs(t.y));
+
+    // 位移不到 8pt 不接管，把这次触摸留给 tap 手势
+    if (self.dragDistance < 8.0) {
+        if (g.state == UIGestureRecognizerStateEnded ||
+            g.state == UIGestureRecognizerStateCancelled ||
+            g.state == UIGestureRecognizerStateFailed) {
+            self.dragDistance = 0;
+        }
+        return;
+    }
+    self.dragging = YES;
 
     CGSize b = self.root.bounds.size;
     const CGFloat half = 27;
@@ -263,12 +294,15 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
     c.y = MAX(half + 34, MIN(b.height - half - 24, c.y));
     self.fab.center = c;
 
-    if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
+    if (g.state == UIGestureRecognizerStateEnded ||
+        g.state == UIGestureRecognizerStateCancelled ||
+        g.state == UIGestureRecognizerStateFailed) {
+        self.lastDragEndTime = CACurrentMediaTime();
         [self snapFAB];
         [self saveFABPosition];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            self.dragging = NO;
-        });
+        // 同步复位，不依赖延时：手势被系统抢走也一定清干净
+        self.dragging = NO;
+        self.dragDistance = 0;
     }
 }
 
@@ -291,10 +325,21 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
     [d setFloat:self.fab.center.y / b.height forKey:@"xlgrab.faby"];
 }
 
-- (void)fabTapped {
-    if (self.dragging) return;
+- (void)handleFABTap:(UITapGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateRecognized) return;
+    if (CACurrentMediaTime() - self.lastDragEndTime < 0.35) return;   // 刚拖完不算点击
+
+    VGLogLine([NSString stringWithFormat:@"[UI] fab tap, panelVisible=%d",
+               (int)self.panelVisible]);
     if (self.panelVisible) [self hidePanel];
     else [self showPanel];
+}
+
+#pragma mark - UIGestureRecognizerDelegate
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
+    return YES;
 }
 
 - (void)handleLongPress:(UILongPressGestureRecognizer *)g {
@@ -435,6 +480,10 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
         self.panel.transform = CGAffineTransformIdentity;
     }];
     self.panelVisible = YES;
+    VGLogLine([NSString stringWithFormat:@"[UI] showPanel items=%lu dim=%@ panel=%@",
+               (unsigned long)self.items.count,
+               self.dim ? @"ok" : @"nil",
+               self.panel ? @"ok" : @"nil"]);
     [self.window bringSubviewToFront:self.root];
 }
 
