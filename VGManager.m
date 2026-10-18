@@ -164,7 +164,9 @@ static NSHashTable *sInjectedControllers(void) {
 - (void)ingestPayload:(NSDictionary *)payload fromWebView:(WKWebView *)webView {
     NSString *url = payload[@"url"];
     if (![url isKindOfClass:[NSString class]] || url.length < 8) return;
-    if (![url hasPrefix:@"http"]) return;
+    // http(s) 走网络下载；file:// 是 App 沙盒内的本地视频（如 Telegram 缓存），走导出
+    BOOL isLocal = [url hasPrefix:@"file://"];
+    if (![url hasPrefix:@"http"] && !isLocal) return;
 
     BOOL changed = NO;
     @synchronized (self.media) {

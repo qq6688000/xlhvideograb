@@ -34,7 +34,8 @@ static void VGRecordURL(id value, NSString *source) {
         if (s.length < 24) return;
 
         NSString *lower = s.lowercaseString;
-        if (![lower hasPrefix:@"http"]) return;
+        BOOL isLocal = [lower hasPrefix:@"file://"];
+        if (![lower hasPrefix:@"http"] && !isLocal) return;
 
         BOOL media = [lower containsString:@".mp4"]
                   || [lower containsString:@".m3u8"]

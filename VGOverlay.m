@@ -96,6 +96,7 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
 
 @property (nonatomic, strong) VGPassthroughView *root;
 @property (nonatomic, strong) UIWindow *fabWindow;
+@property (nonatomic, strong) UIWindow *panelWindow;
 @property (nonatomic, strong) UIButton *fab;
 
 @property (nonatomic, strong) UIView *dim;
@@ -192,14 +193,30 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
     self.fab = fab;
     self.fabWindow = fw;
 
-    // 面板层：全屏透明，挂在 App 主窗口，默认隐藏
-    VGPassthroughView *pr = [[VGPassthroughView alloc] initWithFrame:w.bounds];
+    // 面板层：独立全屏窗口。挂在 App 主窗口会被 Telegram 的浮层压住导致点不动
+    UIWindow *pw = nil;
+    UIViewController *pvc = [UIViewController new];
+    pvc.view.backgroundColor = [UIColor clearColor];
+    if (@available(iOS 13.0, *)) {
+        UIWindowScene *scene = w.windowScene;
+        if (!scene) return;
+        pw = [[UIWindow alloc] initWithWindowScene:scene];
+        pw.frame = scene.coordinateSpace.bounds;
+    } else {
+        pw = [[UIWindow alloc] initWithFrame:w.bounds];
+    }
+    pw.windowLevel = UIWindowLevelAlert + 190;
+    pw.backgroundColor = [UIColor clearColor];
+    pw.rootViewController = pvc;
+
+    VGPassthroughView *pr = [[VGPassthroughView alloc] initWithFrame:pvc.view.bounds];
     pr.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     pr.backgroundColor = [UIColor clearColor];
     pr.opaque = NO;
-    pr.hidden = YES;
-    [w addSubview:pr];
+    [pvc.view addSubview:pr];
+    pw.hidden = YES;
     self.root = pr;
+    self.panelWindow = pw;
 
     [self layoutFAB];
 
@@ -217,6 +234,8 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     self.fabWindow.hidden = YES;
     self.fabWindow = nil;
+    self.panelWindow.hidden = YES;
+    self.panelWindow = nil;
     [self.root removeFromSuperview];
     self.root = nil;
     self.fab = nil;
@@ -535,7 +554,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other 
     [self refreshItems];
 
     self.root.hidden = NO;
-    [self.window bringSubviewToFront:self.root];
+    self.panelWindow.hidden = NO;
     self.fabWindow.hidden = YES;          // 面板期间藏球，避免遮挡列表
 
     self.dim.hidden = NO;
@@ -562,6 +581,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other 
         self.panel.hidden = YES;
         self.dim.hidden = YES;
         self.root.hidden = YES;
+        self.panelWindow.hidden = YES;
         self.fabWindow.hidden = NO;
     }];
 }
