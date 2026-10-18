@@ -64,9 +64,37 @@
 
 #pragma mark - 入口
 
+- (void)exportLocalFile:(VGMediaItem *)item
+                progress:(VGProgressBlock)progress
+              completion:(VGFinishBlock)completion {
+    NSString *path = [NSURL URLWithString:item.url].path;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (!path.length || ![fm fileExistsAtPath:path]) {
+        if (completion) completion(nil, [NSError errorWithDomain:@"xlhgrab" code:-2
+            userInfo:@{NSLocalizedDescriptionKey: @"本地文件不存在，可能已被 App 清理"}]);
+        return;
+    }
+    NSString *dir = [VGDownloader downloadDirectory];
+    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:NULL];
+    NSString *name = item.suggestedFileName.length ? item.suggestedFileName : path.lastPathComponent;
+    NSString *dst = [dir stringByAppendingPathComponent:name];
+    if ([fm fileExistsAtPath:dst]) [fm removeItemAtPath:dst error:NULL];
+    NSError *err = nil;
+    if (![fm copyItemAtPath:path toPath:dst error:&err]) {
+        if (completion) completion(nil, err);
+        return;
+    }
+    if (progress) progress(1.0, @"已导出");
+    if (completion) completion([NSURL fileURLWithPath:dst], nil);
+}
+
 - (void)downloadItem:(VGMediaItem *)item progress:(VGProgressBlock)progress completion:(VGFinishBlock)completion {
     if (!item.url.length) {
         if (completion) completion(nil, [NSError errorWithDomain:@"xlhgrab" code:-1 userInfo:@{NSLocalizedDescriptionKey: @"链接为空"}]);
+        return;
+    }
+    if (VGIsLocalFileURL(item.url)) {
+        [self exportLocalFile:item progress:progress completion:completion];
         return;
     }
     switch (item.kind) {

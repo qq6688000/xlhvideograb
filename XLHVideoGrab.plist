@@ -30,7 +30,20 @@
             "com.google.ios.youtube",
             "com.tencent.live4iphone",
             "com.iqiyi.iphone",
-            "com.youku.YouKu"
+            "com.youku.YouKu",
+            "ph.telegra.Telegraph",
+            "ph.telegra.TelegraphX",
+            "ph.telegra.TelegramX",
+            "org.telegram.Telegram",
+            "com.swiftgram.app",
+            "com.nicegram.app"
+        );
+        Executables = (
+            "Telegram",
+            "Telegram X",
+            "Telegram Lite",
+            "Swiftgram",
+            "Nicegram"
         );
     };
 }

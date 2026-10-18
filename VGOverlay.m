@@ -553,14 +553,16 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
     }
 
     __weak typeof(self) weakSelf = self;
-    [ac addAction:[UIAlertAction actionWithTitle:@"下载" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+    BOOL isLocal = VGIsLocalFileURL(item.url);
+    [ac addAction:[UIAlertAction actionWithTitle:(isLocal ? @"导出文件" : @"下载")
+                                          style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
         [weakSelf downloadItem:item];
     }]];
     [ac addAction:[UIAlertAction actionWithTitle:@"复制链接" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
         [UIPasteboard generalPasteboard].string = item.url ?: @"";
         [weakSelf toast:@"链接已复制"];
     }]];
-    [ac addAction:[UIAlertAction actionWithTitle:@"用浏览器打开" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+    if (!isLocal) [ac addAction:[UIAlertAction actionWithTitle:@"用浏览器打开" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
         NSURL *u = [NSURL URLWithString:item.url];
         if (u) [[UIApplication sharedApplication] openURL:u options:@{} completionHandler:nil];
     }]];

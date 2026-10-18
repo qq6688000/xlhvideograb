@@ -39,6 +39,12 @@ FOUNDATION_EXPORT BOOL VGConfigBool(NSString *key, BOOL fallback);
 FOUNDATION_EXPORT NSString *VGConfigString(NSString *key);
 FOUNDATION_EXPORT void VGConfigReload(void);
 
+/// 是否 Telegram 系 App（原生播放器但走 AVPlayer，可安全默认出球）
+FOUNDATION_EXPORT BOOL VGIsTelegramBundle(void);
+
+/// 是否是本地沙盒文件 URL（file://）
+FOUNDATION_EXPORT BOOL VGIsLocalFileURL(NSString *url);
+
 /// 按 URL 猜测媒体类型（hls/dash/audio/segment/progressive）
 FOUNDATION_EXPORT NSString *VGGuessKindString(NSString *url);
 

@@ -145,6 +145,19 @@ NSString *VGConfigString(NSString *key) {
 
 @end
 
+BOOL VGIsTelegramBundle(void) {
+    NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"";
+    NSString *exe = [NSBundle mainBundle].infoDictionary[@"CFBundleExecutable"] ?: @"";
+    NSArray *ids = @[@"ph.telegra.Telegraph", @"ph.telegra.TelegraphX", @"ph.telegra.TelegramX",
+                     @"org.telegram.Telegram", @"com.swiftgram.app", @"com.nicegram.app"];
+    if ([ids containsObject:bid]) return YES;
+    return [exe.lowercaseString containsString:@"telegram"] || [exe.lowercaseString containsString:@"swiftgram"];
+}
+
+BOOL VGIsLocalFileURL(NSString *url) {
+    return [url.lowercaseString hasPrefix:@"file://"];
+}
+
 NSString *VGGuessKindString(NSString *url) {
     if (![url isKindOfClass:[NSString class]]) return @"progressive";
     NSString *s = url.lowercaseString;

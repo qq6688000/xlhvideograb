@@ -253,8 +253,9 @@ static NSHashTable *sInjectedControllers(void) {
     if (!win || win.hidden) return;
     if (win.windowLevel != UIWindowLevelNormal) return;
 
-    // 没有 WebView 的 App：必须显式开启原生模式才挂，默认宁可不出球也不挡触控
-    if (!webView && !VGConfigBool(@"native", NO)) return;
+    // 没有 WebView 的 App：默认不挂（避免挡触控）；
+    // 例外是 Telegram 系——它走标准 AVPlayer，风险低，默认允许出球
+    if (!webView && !VGConfigBool(@"native", NO) && !VGIsTelegramBundle()) return;
 
     VGOverlayController *overlay = [VGOverlayController controllerForWindow:win];
     if (!overlay) return;
