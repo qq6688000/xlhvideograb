@@ -213,5 +213,6 @@ static void VGRecordAsset(AVAsset *asset, NSString *source) {
     @autoreleasepool {
         %init(VGAVHooks);
         %init(VGNetHooks);
+        VGLogLine(@"\u5bfc\u5165 %@: AV \u94a9\u5b50\u5df2\u5b89\u88c5, net=%@", XLH_VERSION, (VGConfigBool(@"net", NO) ? @"on" : @"off"));
     }
 }

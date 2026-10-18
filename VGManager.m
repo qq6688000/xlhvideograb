@@ -37,12 +37,15 @@ static char kVGProxyKey;
 - (void)trackWebView:(WKWebView *)webView;
 - (WKWebView *)activeWebView;
 - (void)ingestPayload:(NSDictionary *)payload fromWebView:(WKWebView *)webView;
+- (void)scanSandboxMediaIfNeeded;
++ (NSArray<NSDictionary *> *)scanMediaFilesInSandbox;
 - (NSArray<VGMediaItem *> *)sortedItems;
 - (void)clearItems;
 - (void)attachUIForWebView:(WKWebView *)webView;
 - (void)onAppActive;
 - (UIWindow *)keyWindow;
 @property (nonatomic, assign, readwrite) NSInteger nativeProbes;
+@property (nonatomic, assign) NSTimeInterval lastSandboxScan;
 @end
 
 @implementation VGManager
@@ -203,6 +206,85 @@ static NSHashTable *sInjectedControllers(void) {
             [[NSNotificationCenter defaultCenter] postNotificationName:VGMediaDidChangeNotification object:nil];
         });
     }
+}
+
+#pragma mark - 沙盒媒体扫描（原生 App 不走 AVPlayer 时的兜底）
+
+- (void)scanSandboxMediaIfNeeded {
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (now - self.lastSandboxScan < 5.0) return;
+    self.lastSandboxScan = now;
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSArray<NSDictionary *> *found = [[self class] scanMediaFilesInSandbox];
+        if (!found.count) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            for (NSDictionary *f in found) {
+                [self ingestPayload:@{@"url": f[@"url"], @"kind": f[@"kind"], @"source": @"sandbox"}
+                        fromWebView:nil];
+            }
+        });
+    });
+}
+
++ (NSArray<NSDictionary *> *)scanMediaFilesInSandbox {
+    static NSSet *videoExts = nil;
+    static NSSet *audioExts = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        videoExts = [NSSet setWithArray:@[@"mp4", @"mov", @"m4v", @"mkv", @"webm", @"flv", @"3gp"]];
+        audioExts = [NSSet setWithArray:@[@"mp3", @"m4a", @"aac", @"flac", @"ogg", @"wav"]];
+    });
+
+    NSMutableArray<NSString *> *roots = [NSMutableArray array];
+    NSString *home = NSHomeDirectory();
+    NSString *tmp = NSTemporaryDirectory();
+    if (tmp.length) [roots addObject:tmp];
+    if (home.length) {
+        [roots addObject:[home stringByAppendingPathComponent:@"Library/Caches"]];
+        [roots addObject:[home stringByAppendingPathComponent:@"Library/Application Support"]];
+        [roots addObject:[home stringByAppendingPathComponent:@"Documents"]];
+        [roots addObject:[home stringByAppendingPathComponent:@"tmp"]];
+    }
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSTimeInterval cutoff = [NSDate date].timeIntervalSince1970 - 86400.0;
+    NSMutableArray<NSDictionary *> *hits = [NSMutableArray array];
+
+    for (NSString *root in roots) {
+        if (![fm fileExistsAtPath:root]) continue;
+        NSDirectoryEnumerator *en = [fm enumeratorAtPath:root];
+        for (NSString *rel in en) {
+            NSString *ext = rel.pathExtension.lowercaseString;
+            BOOL isVideo = [videoExts containsObject:ext];
+            BOOL isAudio = [audioExts containsObject:ext];
+            if (!isVideo && !isAudio) continue;
+
+            NSString *full = [root stringByAppendingPathComponent:rel];
+            NSDictionary *attrs = [fm attributesOfItemAtPath:full error:nil];
+            if (!attrs) continue;
+            if ([attrs[NSFileType] isEqual:NSFileTypeDirectory]) continue;
+            unsigned long long size = [attrs[NSFileSize] unsignedLongLongValue];
+            if (size < 100 * 1024) continue;
+            NSDate *mtime = attrs[NSFileModificationDate];
+            if (mtime.timeIntervalSince1970 < cutoff) continue;
+
+            NSString *fileURL = [NSURL fileURLWithPath:full].absoluteString;
+            if (!fileURL.length) continue;
+            [hits addObject:@{@"url": fileURL,
+                              @"kind": isVideo ? @"progressive" : @"audio",
+                              @"size": @(size),
+                              @"mtime": mtime}];
+            if (hits.count >= 400) break;
+        }
+        if (hits.count >= 400) break;
+    }
+
+    [hits sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [(NSDate *)b[@"mtime"] compare:(NSDate *)a[@"mtime"]];
+    }];
+    if (hits.count > 60) return [hits subarrayWithRange:NSMakeRange(0, 60)];
+    return hits;
 }
 
 - (NSArray<VGMediaItem *> *)sortedItems {

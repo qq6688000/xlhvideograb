@@ -587,6 +587,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other 
 }
 
 - (void)refreshItems {
+    if (!self.webView) [[VGManager shared] scanSandboxMediaIfNeeded];
     self.items = [[VGManager shared] sortedItems];
 
     NSInteger total = (NSInteger)self.items.count;
