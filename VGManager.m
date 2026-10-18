@@ -251,6 +251,10 @@ static NSHashTable *sInjectedControllers(void) {
     // 直接把悬浮层挂在 App 自己的 window 上，不再新建独立窗口
     UIWindow *win = webView.window ?: [self keyWindow];
     if (!win || win.hidden) return;
+    if (win.windowLevel != UIWindowLevelNormal) return;
+
+    // 没有 WebView 的 App：必须显式开启原生模式才挂，默认宁可不出球也不挡触控
+    if (!webView && !VGConfigBool(@"native", NO)) return;
 
     VGOverlayController *overlay = [VGOverlayController controllerForWindow:win];
     if (!overlay) return;

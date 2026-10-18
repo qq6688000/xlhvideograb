@@ -586,6 +586,7 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
 }
 
 - (void)shareLogFile {
+    VGLogDump();
     NSString *path = VGLogPath();
     if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
         [self toast:@"还没有日志，先播放几秒"];

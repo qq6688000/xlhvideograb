@@ -176,40 +176,45 @@ NSString *VGLogPath(void) {
     return gVGLogPath;
 }
 
+static NSMutableArray<NSString *> *gVGRing = nil;
+static NSLock *gVGRingLock = nil;
+
 void VGLogLine(NSString *line) {
     if (!line.length) return;
     if (!VGConfigBool(@"debug", YES)) return;
 
-    static NSLock *lock = nil;
     static NSDateFormatter *fmt = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        lock = [NSLock new];
+        gVGRing = [NSMutableArray array];
+        gVGRingLock = [NSLock new];
         fmt = [NSDateFormatter new];
         fmt.dateFormat = @"HH:mm:ss";
     });
 
-    [lock lock];
-    @try {
-        NSString *path = VGLogPath();
-        NSFileManager *fm = [NSFileManager defaultManager];
-        if (![fm fileExistsAtPath:path]) {
-            [fm createFileAtPath:path contents:nil attributes:nil];
-        }
-        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
-        if (!fh) return;
-
-        unsigned long long size = [fh seekToEndOfFile];
-        if (size > 512 * 1024) {
-            [fh truncateFileAtOffset:0];
-            size = 0;
-        }
-        NSString *entry = [NSString stringWithFormat:@"%@ %@\n", [fmt stringFromDate:[NSDate date]], line];
-        [fh writeData:[entry dataUsingEncoding:NSUTF8StringEncoding]];
-        [fh closeFile];
-    } @catch (__unused NSException *e) {
-        // 日志失败不能影响主流程
-    } @finally {
-        [lock unlock];
+    // 只进内存，绝不碰磁盘：热路径里做 I/O 会拖死 App
+    NSString *entry = [NSString stringWithFormat:@"%@ %@", [fmt stringFromDate:[NSDate date]], line];
+    [gVGRingLock lock];
+    [gVGRing addObject:entry];
+    if (gVGRing.count > 1500) {
+        [gVGRing removeObjectsInRange:NSMakeRange(0, gVGRing.count - 1500)];
     }
+    [gVGRingLock unlock];
+}
+
+void VGLogDump(void) {
+    [gVGRingLock lock];
+    NSString *text = [gVGRing componentsJoinedByString:@"\n"];
+    NSUInteger count = gVGRing.count;
+    [gVGRingLock unlock];
+
+    NSString *header = [NSString stringWithFormat:@"XLH VideoGrab %@\n设备 %@ / iOS %@\n记录 %lu 行\n---\n",
+                        VGVersionString(),
+                        [[UIDevice currentDevice] model],
+                        [[UIDevice currentDevice] systemVersion],
+                        (unsigned long)count];
+    NSString *full = [header stringByAppendingString:text ?: @""];
+
+    NSError *err = nil;
+    [full writeToFile:VGLogPath() atomically:YES encoding:NSUTF8StringEncoding error:&err];
 }

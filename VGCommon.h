@@ -45,3 +45,5 @@ FOUNDATION_EXPORT NSString *VGGuessKindString(NSString *url);
 /// 调试日志（写沙盒临时目录，音量上限 512KB）
 FOUNDATION_EXPORT NSString *VGLogPath(void);
 FOUNDATION_EXPORT void VGLogLine(NSString *line);
+/// 把内存缓冲落盘（点「日志」时才调用）
+FOUNDATION_EXPORT void VGLogDump(void);

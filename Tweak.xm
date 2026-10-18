@@ -46,7 +46,11 @@
 - (void)makeKeyAndVisible {
     %orig;
     UIWindow *w = self;
-    if (!w.isKeyWindow) return;
+    // 只认 App 主窗口；弹窗、键盘、状态栏那些窗口一概不碰，
+    // 之前就是在这些窗口上重复挂载导致整屏触控被吃掉。
+    if (w.windowLevel != UIWindowLevelNormal) return;
+    if (w.hidden) return;
+    if (!VGConfigBool(@"native", NO)) return;   // 原生 App 默认不挂，需 xlgrab native on
     dispatch_async(dispatch_get_main_queue(), ^{
         [[VGManager shared] attachUIForWebView:nil];
     });
