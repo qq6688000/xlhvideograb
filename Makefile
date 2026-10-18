@@ -16,7 +16,7 @@ XLHVideoGrab_FILES := Tweak.xm \
                       VGManager.m \
                       VGOverlay.m \
                       VGDownloader.m \
-                      VGScript.mm
+                      VGScript.m
 
 XLHVideoGrab_CFLAGS := -fobjc-arc -O2 -Wall
 XLHVideoGrab_FRAMEWORKS := Foundation UIKit WebKit CoreGraphics
