@@ -95,6 +95,7 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
 @property (nonatomic, weak) WKWebView *webView;
 
 @property (nonatomic, strong) VGPassthroughView *root;
+@property (nonatomic, strong) UIWindow *fabWindow;
 @property (nonatomic, strong) UIButton *fab;
 
 @property (nonatomic, strong) UIView *dim;
@@ -133,29 +134,89 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
 }
 
 - (void)attach {
-    if (self.root) return;
+    if (self.fabWindow) return;
     UIWindow *w = self.window;
     if (!w) return;
 
-    VGPassthroughView *root = [[VGPassthroughView alloc] initWithFrame:w.bounds];
-    root.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    root.backgroundColor = [UIColor clearColor];
-    root.opaque = NO;
-    [w addSubview:root];
-    self.root = root;
+    const CGFloat size = 54;
 
-    [self setupFAB];
+    // 球窗口：只有 54x54，层级压过 App 全部视图，但不覆盖其它任何区域
+    UIWindow *fw = nil;
+    if (@available(iOS 13.0, *)) {
+        UIWindowScene *scene = w.windowScene;
+        if (!scene) return;
+        fw = [[UIWindow alloc] initWithWindowScene:scene];
+    } else {
+        fw = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, size, size)];
+    }
+    fw.frame = CGRectMake(0, 0, size, size);
+    fw.windowLevel = UIWindowLevelAlert + 200;
+    fw.backgroundColor = [UIColor clearColor];
+    fw.rootViewController = [UIViewController new];
+    fw.rootViewController.view.backgroundColor = [UIColor clearColor];
+    fw.hidden = NO;
+
+    UIButton *fab = [UIButton buttonWithType:UIButtonTypeCustom];
+    fab.frame = CGRectMake(0, 0, size, size);
+    fab.backgroundColor = [UIColor colorWithWhite:0.10 alpha:0.62];
+    fab.layer.cornerRadius = size / 2;
+    fab.layer.borderWidth = 1.0 / [UIScreen mainScreen].scale;
+    fab.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.40].CGColor;
+    fab.layer.shadowColor = [UIColor blackColor].CGColor;
+    fab.layer.shadowOpacity = 0.28;
+    fab.layer.shadowRadius = 6;
+    fab.layer.shadowOffset = CGSizeMake(0, 2);
+    fab.accessibilityLabel = @"抓取视频";
+    [fab setTitle:@"抓" forState:UIControlStateNormal];
+    [fab setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    fab.titleLabel.font = [UIFont boldSystemFontOfSize:19];
+    fab.exclusiveTouch = YES;
+
+    UITapGestureRecognizer *tap =
+        [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleFABTap:)];
+    tap.delegate = self;
+    [fab addGestureRecognizer:tap];
+
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
+    pan.delegate = self;
+    pan.cancelsTouchesInView = NO;
+    [fab addGestureRecognizer:pan];
+
+    UILongPressGestureRecognizer *press = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
+    press.minimumPressDuration = 0.6;
+    press.delegate = self;
+    press.cancelsTouchesInView = NO;
+    [fab addGestureRecognizer:press];
+
+    [fw.rootViewController.view addSubview:fab];
+    self.fab = fab;
+    self.fabWindow = fw;
+
+    // 面板层：全屏透明，挂在 App 主窗口，默认隐藏
+    VGPassthroughView *pr = [[VGPassthroughView alloc] initWithFrame:w.bounds];
+    pr.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    pr.backgroundColor = [UIColor clearColor];
+    pr.opaque = NO;
+    pr.hidden = YES;
+    [w addSubview:pr];
+    self.root = pr;
+
     [self layoutFAB];
 
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
     [nc addObserver:self selector:@selector(onMediaChangedNote:) name:VGMediaDidChangeNotification object:nil];
     [nc addObserver:self selector:@selector(onAppActiveNote:) name:UIApplicationDidBecomeActiveNotification object:nil];
     [nc addObserver:self selector:@selector(onOrientationChanged:) name:UIDeviceOrientationDidChangeNotification object:nil];
-    [nc addObserver:self selector:@selector(onOrientationChanged:) name:UIDeviceOrientationDidChangeNotification object:nil];
+
+    VGLogLine([NSString stringWithFormat:@"[attach] fabWindow=%.0f,%.0f level=%.0f scene=%@",
+               fw.frame.origin.x, fw.frame.origin.y, fw.windowLevel,
+               w.windowScene ? @"yes" : @"nil"]);
 }
 
 - (void)detach {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    self.fabWindow.hidden = YES;
+    self.fabWindow = nil;
     [self.root removeFromSuperview];
     self.root = nil;
     self.fab = nil;
@@ -176,11 +237,10 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
         [self detach];
         return;
     }
-    if (!self.root) [self attach];
-    if (!self.root) return;
+    if (!self.fabWindow) [self attach];
+    if (!self.fabWindow) return;
 
-    self.root.hidden = NO;
-    [self.window bringSubviewToFront:self.root];
+    self.fabWindow.hidden = NO;
 
     BOOL hiddenByUser = [[NSUserDefaults standardUserDefaults] boolForKey:@"xlgrab.fabhidden"];
     NSString *cfg = VGConfigString(@"fab");
@@ -190,6 +250,8 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
         hiddenByUser = YES;
     }
     self.fab.hidden = hiddenByUser;
+    // 球隐藏时窗口也要收起，不能留一块看不见的触摸区
+    self.fabWindow.hidden = hiddenByUser;
 }
 
 - (void)onOrientationChanged:(NSNotification *)note {
@@ -246,8 +308,8 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
 }
 
 - (void)layoutFAB {
-    if (!self.fab || !self.root) return;
-    CGSize b = self.root.bounds.size;
+    if (!self.fabWindow || !self.window) return;
+    CGSize b = self.window.bounds.size;
     if (b.width < 2 || b.height < 2) return;
 
     const CGFloat size = 54;
@@ -261,14 +323,14 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
     }
     c.x = MAX(size / 2 + 4, MIN(b.width - size / 2 - 4, c.x));
     c.y = MAX(size / 2 + 34, MIN(b.height - size / 2 - 24, c.y));
-    self.fab.center = c;
+    self.fabWindow.frame = CGRectMake(c.x - size / 2, c.y - size / 2, size, size);
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)g {
-    if (!self.fab || !self.root) return;
+    if (!self.fabWindow || !self.window) return;
 
-    CGPoint t = [g translationInView:self.root];
-    [g setTranslation:CGPointZero inView:self.root];
+    CGPoint t = [g translationInView:self.window];
+    [g setTranslation:CGPointZero inView:self.window];
 
     if (g.state == UIGestureRecognizerStateBegan) {
         self.dragDistance = 0;
@@ -276,7 +338,6 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
     }
     self.dragDistance += (CGFloat)(fabs(t.x) + fabs(t.y));
 
-    // 位移不到 8pt 不接管，把这次触摸留给 tap 手势
     if (self.dragDistance < 8.0) {
         if (g.state == UIGestureRecognizerStateEnded ||
             g.state == UIGestureRecognizerStateCancelled ||
@@ -287,12 +348,12 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
     }
     self.dragging = YES;
 
-    CGSize b = self.root.bounds.size;
+    CGSize b = self.window.bounds.size;
     const CGFloat half = 27;
-    CGPoint c = CGPointMake(self.fab.center.x + t.x, self.fab.center.y + t.y);
+    CGPoint c = CGPointMake(self.fabWindow.center.x + t.x, self.fabWindow.center.y + t.y);
     c.x = MAX(half + 4, MIN(b.width - half - 4, c.x));
     c.y = MAX(half + 34, MIN(b.height - half - 24, c.y));
-    self.fab.center = c;
+    self.fabWindow.frame = CGRectMake(c.x - half, c.y - half, 54, 54);
 
     if (g.state == UIGestureRecognizerStateEnded ||
         g.state == UIGestureRecognizerStateCancelled ||
@@ -300,29 +361,29 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
         self.lastDragEndTime = CACurrentMediaTime();
         [self snapFAB];
         [self saveFABPosition];
-        // 同步复位，不依赖延时：手势被系统抢走也一定清干净
         self.dragging = NO;
         self.dragDistance = 0;
     }
 }
 
 - (void)snapFAB {
-    if (!self.fab || !self.root) return;
-    CGSize b = self.root.bounds.size;
+    if (!self.fabWindow || !self.window) return;
+    CGSize b = self.window.bounds.size;
     const CGFloat half = 27;
-    CGFloat x = self.fab.center.x < b.width / 2 ? half + 10 : b.width - half - 10;
+    CGFloat x = self.fabWindow.center.x < b.width / 2 ? half + 10 : b.width - half - 10;
+    CGRect f = self.fabWindow.frame;
     [UIView animateWithDuration:0.2 animations:^{
-        self.fab.center = CGPointMake(x, self.fab.center.y);
+        self.fabWindow.frame = CGRectMake(x - half, f.origin.y, 54, 54);
     }];
 }
 
 - (void)saveFABPosition {
-    if (!self.fab || !self.root) return;
-    CGSize b = self.root.bounds.size;
+    if (!self.fabWindow || !self.window) return;
+    CGSize b = self.window.bounds.size;
     if (b.width < 2 || b.height < 2) return;
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-    [d setFloat:self.fab.center.x / b.width forKey:@"xlgrab.fabx"];
-    [d setFloat:self.fab.center.y / b.height forKey:@"xlgrab.faby"];
+    [d setFloat:self.fabWindow.center.x / b.width forKey:@"xlgrab.fabx"];
+    [d setFloat:self.fabWindow.center.y / b.height forKey:@"xlgrab.faby"];
 }
 
 - (void)handleFABTap:(UITapGestureRecognizer *)g {
@@ -354,6 +415,8 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other 
     [ac addAction:[UIAlertAction actionWithTitle:@"隐藏" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
         [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"xlgrab.fabhidden"];
         weakSelf.fab.hidden = YES;
+        // 窗口必须一起隐藏，否则 54x54 那块区域仍会拦截触摸
+        weakSelf.fabWindow.hidden = YES;
     }]];
     [host presentViewController:ac animated:YES completion:nil];
 }
@@ -471,6 +534,10 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other 
     [self layoutPanel];
     [self refreshItems];
 
+    self.root.hidden = NO;
+    [self.window bringSubviewToFront:self.root];
+    self.fabWindow.hidden = YES;          // 面板期间藏球，避免遮挡列表
+
     self.dim.hidden = NO;
     self.panel.hidden = NO;
     self.panel.alpha = 0;
@@ -484,7 +551,6 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other 
                (unsigned long)self.items.count,
                self.dim ? @"ok" : @"nil",
                self.panel ? @"ok" : @"nil"]);
-    [self.window bringSubviewToFront:self.root];
 }
 
 - (void)hidePanel {
@@ -495,6 +561,8 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other 
     } completion:^(BOOL done) {
         self.panel.hidden = YES;
         self.dim.hidden = YES;
+        self.root.hidden = YES;
+        self.fabWindow.hidden = NO;
     }];
 }
 
