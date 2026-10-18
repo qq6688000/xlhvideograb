@@ -27,6 +27,9 @@ FOUNDATION_EXPORT NSString *const VGMediaDidChangeNotification;
 /// JS / 原生消息入口
 - (void)ingestPayload:(NSDictionary *)payload fromWebView:(WKWebView *)webView;
 
+/// 扫描沙盒媒体缓存（原生 App 不走 AVPlayer 时的兜底，异步、自带节流）
+- (void)scanSandboxMediaIfNeeded;
+
 - (NSArray<VGMediaItem *> *)sortedItems;
 - (void)clearItems;
 
