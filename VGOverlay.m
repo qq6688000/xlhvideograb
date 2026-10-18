@@ -103,6 +103,7 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
 @property (nonatomic, strong) UILabel *emptyLabel;
 @property (nonatomic, strong) UIButton *closeButton;
 @property (nonatomic, strong) UIButton *scanButton;
+@property (nonatomic, strong) UIButton *logButton;
 
 @property (nonatomic, strong) NSArray<VGMediaItem *> *items;
 @property (nonatomic, assign) BOOL panelVisible;
@@ -358,6 +359,17 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
     [panel addSubview:scan];
     self.scanButton = scan;
 
+    UIButton *logBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    [logBtn setTitle:@"日志" forState:UIControlStateNormal];
+    [logBtn setTitleColor:[UIColor colorWithWhite:1 alpha:0.55] forState:UIControlStateNormal];
+    logBtn.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    logBtn.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
+    logBtn.layer.borderWidth = 1;
+    logBtn.layer.cornerRadius = 15;
+    [logBtn addTarget:self action:@selector(shareLogFile) forControlEvents:UIControlEventTouchUpInside];
+    [panel addSubview:logBtn];
+    self.logButton = logBtn;
+
     UILabel *summary = [[UILabel alloc] initWithFrame:CGRectZero];
     summary.textColor = [UIColor colorWithWhite:1 alpha:0.50];
     summary.font = [UIFont systemFontOfSize:11];
@@ -400,7 +412,8 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
     const CGFloat headerH = 44;
     const CGFloat pad = 12;
     self.closeButton.frame = CGRectMake(w - 44, 0, 44, 44);
-    self.scanButton.frame = CGRectMake(w - 76 - 50, (headerH - 30) / 2, 76, 30);
+    self.logButton.frame = CGRectMake(w - 44 - 6 - 44, (headerH - 30) / 2, 44, 30);
+    self.scanButton.frame = CGRectMake(w - 44 - 6 - 44 - 6 - 76, (headerH - 30) / 2, 76, 30);
     self.summary.frame = CGRectMake(pad, headerH - 2, w - pad * 2, 16);
     CGFloat tableY = headerH + 16;
     self.table.frame = CGRectMake(0, tableY, w, h - tableY - 8);
@@ -570,6 +583,24 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
         }
         [weakSelf shareFile:file];
     }];
+}
+
+- (void)shareLogFile {
+    NSString *path = VGLogPath();
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        [self toast:@"还没有日志，先播放几秒"];
+        return;
+    }
+    UIViewController *host = [self topViewController];
+    if (!host) return;
+
+    UIActivityViewController *avc = [[UIActivityViewController alloc] initWithActivityItems:@[[NSURL fileURLWithPath:path]]
+                                                                     applicationActivities:nil];
+    if (avc.popoverPresentationController) {
+        avc.popoverPresentationController.sourceView = self.panel;
+        avc.popoverPresentationController.sourceRect = self.logButton.frame;
+    }
+    [host presentViewController:avc animated:YES completion:nil];
 }
 
 - (void)shareFile:(NSURL *)file {

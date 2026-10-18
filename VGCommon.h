@@ -41,3 +41,7 @@ FOUNDATION_EXPORT void VGConfigReload(void);
 
 /// 按 URL 猜测媒体类型（hls/dash/audio/segment/progressive）
 FOUNDATION_EXPORT NSString *VGGuessKindString(NSString *url);
+
+/// 调试日志（写沙盒临时目录，音量上限 512KB）
+FOUNDATION_EXPORT NSString *VGLogPath(void);
+FOUNDATION_EXPORT void VGLogLine(NSString *line);

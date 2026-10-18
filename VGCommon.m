@@ -154,3 +154,62 @@ NSString *VGGuessKindString(NSString *url) {
     if ([s containsString:@".ts?"] || [s hasSuffix:@".ts"]) return @"segment";
     return @"progressive";
 }
+
+#pragma mark - 调试日志
+
+static NSString *gVGLogPath = nil;
+
+NSString *VGLogPath(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *dir = @"/var/mobile/Documents/XLHVideoGrab";
+        BOOL ok = [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                                           withIntermediateDirectories:YES
+                                                            attributes:nil error:NULL];
+        if (ok && [[NSFileManager defaultManager] isWritableFileAtPath:dir]) {
+            gVGLogPath = [dir stringByAppendingPathComponent:@"probe.log"];
+        } else {
+            // 沙盒 App 走这里，最后用面板的「日志」按钮分享出来
+            gVGLogPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"xlhgrab_probe.log"];
+        }
+    });
+    return gVGLogPath;
+}
+
+void VGLogLine(NSString *line) {
+    if (!line.length) return;
+    if (!VGConfigBool(@"debug", YES)) return;
+
+    static NSLock *lock = nil;
+    static NSDateFormatter *fmt = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        lock = [NSLock new];
+        fmt = [NSDateFormatter new];
+        fmt.dateFormat = @"HH:mm:ss";
+    });
+
+    [lock lock];
+    @try {
+        NSString *path = VGLogPath();
+        NSFileManager *fm = [NSFileManager defaultManager];
+        if (![fm fileExistsAtPath:path]) {
+            [fm createFileAtPath:path contents:nil attributes:nil];
+        }
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (!fh) return;
+
+        unsigned long long size = [fh seekToEndOfFile];
+        if (size > 512 * 1024) {
+            [fh truncateFileAtOffset:0];
+            size = 0;
+        }
+        NSString *entry = [NSString stringWithFormat:@"%@ %@\n", [fmt stringFromDate:[NSDate date]], line];
+        [fh writeData:[entry dataUsingEncoding:NSUTF8StringEncoding]];
+        [fh closeFile];
+    } @catch (__unused NSException *e) {
+        // 日志失败不能影响主流程
+    } @finally {
+        [lock unlock];
+    }
+}

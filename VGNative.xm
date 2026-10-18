@@ -1,196 +1,242 @@
 //
 //  VGNative.xm
-//  原生播放器抓取：抖音 / 快手 / 番茄小说 等不走 <video>，直接 hook AVFoundation
-//
-//  抖音这类 App 有自己的播放引擎（TTVideoEngine），它不一定用
-//  -[AVPlayerItem initWithURL:]，而是先建 AVURLAsset 再包装成 item，
-//  甚至走 NSURLSession 预下载。所以这里把能拿到 URL 的入口全部挂上。
+//  原生播放器抓取：AVFoundation + 运行时嗅探（抖音/番茄小说这类自带播放内核的 App）
 //
 
+#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
-#import <AVKit/AVKit.h>
+#import <objc/runtime.h>
+
 #import "VGCommon.h"
 #import "VGManager.h"
 
-#pragma mark - 采集
+#pragma mark - 记录
 
-static void VGCaptureURL(NSURL *URL, NSString *source);
+static void VGRecordURL(id value, NSString *source) {
+    NSString *s = nil;
+    if ([value isKindOfClass:[NSURL class]]) {
+        s = [(NSURL *)value absoluteString];
+    } else if ([value isKindOfClass:[NSString class]]) {
+        s = (NSString *)value;
+    }
+    if (s.length < 24) return;
 
-/// 可能是媒体地址？（用于 NSURLSession / NSURLConnection 这类高频入口，避免刷屏）
-static BOOL VGMediaLike(NSURL *URL) {
-    if (![URL isKindOfClass:[NSURL class]]) return NO;
-    NSString *s = URL.absoluteString.lowercaseString;
-    if (s.length < 16 || ![s hasPrefix:@"http"]) return NO;
+    NSString *lower = s.lowercaseString;
+    if (![lower hasPrefix:@"http"]) return;
 
-    static NSArray<NSString *> *keys;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        keys = @[ @".m3u8", @".mp4", @".mpd", @".m4a", @".mp3", @".flv",
-                  @"/video/", @"/play/", @"videoplay", @".ts?", @"/stream/",
-                  @"mime_type=video", @"format=mp4" ];
+    BOOL media = [lower containsString:@".mp4"]
+              || [lower containsString:@".m3u8"]
+              || [lower containsString:@".mpd"]
+              || [lower containsString:@".m4a"]
+              || [lower containsString:@".mp3"]
+              || [lower containsString:@".ts?"]
+              || [lower containsString:@"mime_type=video"]
+              || [lower containsString:@"/video/tos"]
+              || [lower containsString:@"/video/"]
+              || [lower containsString:@"video_id="];
+    if (!media) return;
+
+    NSString *kind = VGGuessKindString(s);
+    VGLogLine([NSString stringWithFormat:@"[%@] %@", source ?: @"native", s]);
+
+    [[VGManager shared] countNativeProbe];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[VGManager shared] ingestPayload:@{ @"url": s,
+                                             @"kind": kind ?: @"progressive",
+                                             @"source": source ?: @"native" }
+                              fromWebView:nil];
     });
-    for (NSString *k in keys) {
-        if ([s containsString:k]) return YES;
+}
+
+#pragma mark - 运行时嗅探
+
+static NSMutableSet *gVGKeys = nil;
+static BOOL gVGScanned = NO;
+
+static BOOL VGNameIsNoise(NSString *name) {
+    static NSArray *prefixes = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        prefixes = @[ @"AV", @"NS", @"UI", @"WK", @"CA", @"MTL", @"SK", @"VT", @"PH",
+                      @"Q", @"_", @"Web", @"Core", @"IOSurface", @"CM", @"RP" ];
+    });
+    for (NSString *p in prefixes) {
+        if ([name hasPrefix:p]) return YES;
     }
     return NO;
 }
 
-/// 从 AVAsset 里掏 URL（组合资源掏不到，返回 nil）
-static void VGCaptureAsset(AVAsset *asset, NSString *source) {
-    if ([asset isKindOfClass:[AVURLAsset class]]) {
-        VGCaptureURL(((AVURLAsset *)asset).URL, source);
-    }
-}
-
-static void VGCaptureURL(NSURL *URL, NSString *source) {
-    if (![URL isKindOfClass:[NSURL class]]) return;
-    if (URL.isFileURL) return;
-
-    [[VGManager shared] countNativeProbe];
-
-    NSString *text = URL.absoluteString;
-    if (text.length < 12 || ![text hasPrefix:@"http"]) return;
-    if (!VGConfigBool(@"native", YES)) return;
-
-    static NSMutableSet *seen;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        seen = [NSMutableSet set];
+static BOOL VGNameLooksLikePlayer(NSString *name) {
+    static NSArray *keys = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        keys = @[ @"video", @"player", @"engine", @"media", @"stream", @"aweme", @"ttnet" ];
     });
-
-    @synchronized (seen) {
-        if ([seen containsObject:text]) return;
-        [seen addObject:text];
-        if (seen.count > 1200) [seen removeAllObjects];
+    NSString *lower = name.lowercaseString;
+    for (NSString *k in keys) {
+        if ([lower containsString:k]) return YES;
     }
-
-    [[VGManager shared] ingestPayload:@{ @"url": text,
-                                         @"kind": VGGuessKindString(text),
-                                         @"source": source ?: @"native" }
-                          fromWebView:nil];
+    return NO;
 }
 
-#pragma mark - AVAsset
+static void VGInstallSniffer(Class cls) {
+    NSString *cname = NSStringFromClass(cls);
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    if (!methods) return;
+
+    for (unsigned int i = 0; i < count; i++) {
+        Method m = methods[i];
+        SEL sel = method_getName(m);
+        NSString *sname = NSStringFromSelector(sel);
+        NSString *lower = sname.lowercaseString;
+
+        // 只看名字里带 url / uri 的方法
+        if (!([lower containsString:@"url"] || [lower containsString:@"uri"])) continue;
+
+        // 只动「返回 void、恰好一个对象参数」的方法，避免破坏返回值约定
+        const char *types = method_getTypeEncoding(m);
+        if (!types || types[0] != 'v') continue;
+        if (method_getNumberOfArguments(m) != 3) continue;
+        char argType[8] = {0};
+        method_getArgumentType(m, 2, argType, sizeof(argType));
+        if (argType[0] != '@') continue;
+
+        NSString *key = [NSString stringWithFormat:@"%@|%@", cname, sname];
+        if ([gVGKeys containsObject:key]) continue;
+        [gVGKeys addObject:key];
+
+        IMP origImp = method_getImplementation(m);
+        if (!origImp) continue;
+
+        NSString *source = [NSString stringWithFormat:@"%@.%@", cname, sname];
+        IMP newImp = imp_implementationWithBlock(^(id obj, SEL cmd, id arg) {
+            VGRecordURL(arg, source);
+            ((void (*)(id, SEL, id))origImp)(obj, cmd, arg);
+        });
+        if (!newImp) continue;
+        method_setImplementation(m, newImp);
+    }
+    free(methods);
+}
+
+static void VGScanPlayers(void) {
+    if (gVGScanned) return;
+    gVGScanned = YES;
+
+    int total = objc_getClassList(NULL, 0);
+    if (total <= 0) return;
+
+    Class *classes = (Class *)malloc(sizeof(Class) * (size_t)total);
+    if (!classes) return;
+    total = objc_getClassList(classes, total);
+
+    int candidates = 0;
+    for (int i = 0; i < total; i++) {
+        Class c = classes[i];
+        NSString *name = NSStringFromClass(c);
+        if (!name.length) continue;
+        if (VGNameIsNoise(name)) continue;
+        if (!VGNameLooksLikePlayer(name)) continue;
+
+        candidates++;
+        VGInstallSniffer(c);
+    }
+    free(classes);
+
+    VGLogLine([NSString stringWithFormat:@"扫描完成：共 %d 个类，候选 %d 个，挂钩 %lu 个方法",
+               total, candidates, (unsigned long)gVGKeys.count]);
+}
+
+#pragma mark - AVFoundation 钩子
+
+%group VGAVHooks
 
 %hook AVURLAsset
 
-+ (instancetype)URLAssetWithURL:(NSURL *)URL options:(NSDictionary<NSString *, id> *)options {
-    VGCaptureURL(URL, @"asset+");
-    return %orig;
-}
-
-- (instancetype)initWithURL:(NSURL *)URL options:(NSDictionary<NSString *, id> *)options {
-    VGCaptureURL(URL, @"asset");
+- (instancetype)initWithURL:(NSURL *)URL options:(NSDictionary *)options {
+    VGRecordURL(URL, @"AVURLAsset");
     return %orig;
 }
 
 %end
-
-#pragma mark - AVPlayerItem
 
 %hook AVPlayerItem
 
 - (instancetype)initWithURL:(NSURL *)URL {
-    VGCaptureURL(URL, @"item");
-    return %orig;
-}
-
-- (instancetype)initWithURL:(NSURL *)URL automaticallyLoadedAssetKeys:(NSArray<NSString *> *)keys {
-    VGCaptureURL(URL, @"item");
+    VGRecordURL(URL, @"AVPlayerItem");
     return %orig;
 }
 
 - (instancetype)initWithAsset:(AVAsset *)asset {
-    VGCaptureAsset(asset, @"item-asset");
-    return %orig;
-}
-
-- (instancetype)initWithAsset:(AVAsset *)asset automaticallyLoadedAssetKeys:(NSArray<NSString *> *)keys {
-    VGCaptureAsset(asset, @"item-asset");
-    return %orig;
-}
-
-+ (instancetype)playerItemWithURL:(NSURL *)URL {
-    VGCaptureURL(URL, @"item+");
-    return %orig;
-}
-
-+ (instancetype)playerItemWithAsset:(AVAsset *)asset {
-    VGCaptureAsset(asset, @"item-asset+");
-    return %orig;
-}
-
-+ (instancetype)playerItemWithAsset:(AVAsset *)asset automaticallyLoadedAssetKeys:(NSArray<NSString *> *)keys {
-    VGCaptureAsset(asset, @"item-asset+");
+    if ([asset isKindOfClass:[AVURLAsset class]]) {
+        VGRecordURL([(AVURLAsset *)asset URL], @"AVPlayerItem.asset");
+    }
     return %orig;
 }
 
 %end
-
-#pragma mark - AVPlayer
 
 %hook AVPlayer
 
 - (void)replaceCurrentItemWithPlayerItem:(AVPlayerItem *)item {
-    VGCaptureAsset(item.asset, @"player");
-    %orig;
-}
-
-- (void)setCurrentItem:(AVPlayerItem *)item {
-    VGCaptureAsset(item.asset, @"player");
-    %orig;
-}
-
-%end
-
-#pragma mark - AVPlayerViewController
-
-%hook AVPlayerViewController
-
-- (void)setPlayer:(AVPlayer *)player {
-    VGCaptureAsset(player.currentItem.asset, @"avpvc");
+    AVAsset *asset = item.asset;
+    if ([asset isKindOfClass:[AVURLAsset class]]) {
+        VGRecordURL([(AVURLAsset *)asset URL], @"AVPlayer");
+    }
     %orig;
 }
 
 %end
 
-#pragma mark - 网络层兜底
+%end
 
-@interface __NSCFURLSession : NSURLSession
-@end
+#pragma mark - 网络兜底
 
-@interface __NSCFURLConnection : NSURLConnection
-@end
+%group VGNetHooks
 
 %hook __NSCFURLSession
 
-- (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url {
-    if (VGMediaLike(url)) VGCaptureURL(url, @"session");
+- (id)dataTaskWithURL:(NSURL *)url {
+    VGRecordURL(url, @"NSURLSession");
     return %orig;
 }
 
-- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request {
-    if (VGMediaLike(request.URL)) VGCaptureURL(request.URL, @"session");
-    return %orig;
-}
-
-- (NSURLSessionDownloadTask *)downloadTaskWithURL:(NSURL *)url {
-    if (VGMediaLike(url)) VGCaptureURL(url, @"session");
-    return %orig;
-}
-
-- (NSURLSessionDownloadTask *)downloadTaskWithRequest:(NSURLRequest *)request {
-    if (VGMediaLike(request.URL)) VGCaptureURL(request.URL, @"session");
+- (id)dataTaskWithRequest:(NSURLRequest *)request {
+    VGRecordURL(request.URL, @"NSURLSession");
     return %orig;
 }
 
 %end
 
-%hook __NSCFURLConnection
+%end
 
-- (instancetype)initWithRequest:(NSURLRequest *)request delegate:(id)delegate startImmediately:(BOOL)startImmediately {
-    if (VGMediaLike(request.URL)) VGCaptureURL(request.URL, @"connection");
-    return %orig;
+#pragma mark - 生命周期
+
+static void VGInstallObservers(void) {
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
+                                                      object:nil
+                                                       queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(NSNotification *note) {
+        (void)note;
+        // 类在启动后才陆续加载，延迟扫一次即可
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            VGScanPlayers();
+        });
+    }];
 }
 
-%end
+__attribute__((constructor)) static void VGNativeInit(void) {
+    @autoreleasepool {
+        gVGKeys = [NSMutableSet set];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            VGInstallObservers();
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                VGScanPlayers();
+            });
+        });
+    }
+}
