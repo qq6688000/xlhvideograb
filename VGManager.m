@@ -40,6 +40,8 @@ static char kVGProxyKey;
 - (NSArray<VGMediaItem *> *)sortedItems;
 - (void)clearItems;
 - (void)attachUIForWebView:(WKWebView *)webView;
+- (void)onAppActive;
+- (UIWindow *)keyWindow;
 @end
 
 @implementation VGManager
@@ -63,6 +65,34 @@ static char kVGProxyKey;
                               withIntermediateDirectories:YES attributes:nil error:NULL];
     [[NSFileManager defaultManager] createDirectoryAtPath:@"/var/mobile/Documents/XLHVideoGrab"
                               withIntermediateDirectories:YES attributes:nil error:NULL];
+
+    // 抖音 / 番茄小说这类 App 没有可用的 WKWebView，也要挂上悬浮球
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(onAppActive)
+                                                 name:UIApplicationDidBecomeActiveNotification
+                                               object:nil];
+}
+
+- (void)onAppActive {
+    NSArray *delays = @[@0.6, @2.0, @5.0];
+    for (NSNumber *d in delays) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self attachUIForWebView:[self activeWebView]];
+        });
+    }
+}
+
+- (UIWindow *)keyWindow {
+    UIWindow *fallback = nil;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+            if (w.hidden) continue;
+            if (w.isKeyWindow) return w;
+            if (!fallback && w.windowLevel == UIWindowLevelNormal) fallback = w;
+        }
+    }
+    return fallback;
 }
 
 #pragma mark - 注入
@@ -212,12 +242,12 @@ static NSHashTable *sInjectedControllers(void) {
     if (!VGConfigBool(@"enabled", YES)) return;
 
     // 直接把悬浮层挂在 App 自己的 window 上，不再新建独立窗口
-    UIWindow *win = webView.window;
-    if (!win) return;
+    UIWindow *win = webView.window ?: [self keyWindow];
+    if (!win || win.hidden) return;
 
     VGOverlayController *overlay = [VGOverlayController controllerForWindow:win];
     if (!overlay) return;
-    [overlay bindWebView:webView];
+    if (webView) [overlay bindWebView:webView];
     [overlay showIfNeeded];
 }
 

@@ -40,6 +40,20 @@
 
 %end
 
+%hook UIWindow
+
+// 抖音、番茄小说等没有 WKWebView 的 App，靠窗口出现来挂悬浮球
+- (void)makeKeyAndVisible {
+    %orig;
+    UIWindow *w = self;
+    if (!w.isKeyWindow) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[VGManager shared] attachUIForWebView:nil];
+    });
+}
+
+%end
+
 %ctor {
     @autoreleasepool {
         [[VGManager shared] start];

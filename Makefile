@@ -16,10 +16,11 @@ XLHVideoGrab_FILES := Tweak.xm \
                       VGManager.m \
                       VGOverlay.m \
                       VGDownloader.m \
-                      VGScript.m
+                      VGScript.m \
+                      VGNative.xm
 
 XLHVideoGrab_CFLAGS := -fobjc-arc -O2 -Wall -Wno-unused-parameter -Wno-unused-function
-XLHVideoGrab_FRAMEWORKS := Foundation UIKit WebKit CoreGraphics
+XLHVideoGrab_FRAMEWORKS := Foundation UIKit WebKit CoreGraphics AVFoundation
 XLHVideoGrab_LIBRARIES := substrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk

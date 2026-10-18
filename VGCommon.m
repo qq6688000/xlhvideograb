@@ -144,3 +144,13 @@ NSString *VGConfigString(NSString *key) {
 }
 
 @end
+
+NSString *VGGuessKindString(NSString *url) {
+    if (![url isKindOfClass:[NSString class]]) return @"progressive";
+    NSString *s = url.lowercaseString;
+    if ([s containsString:@"m3u8"]) return @"hls";
+    if ([s containsString:@".mpd"] || [s containsString:@"manifest.mpd"]) return @"dash";
+    if ([s containsString:@".m4a"] || [s containsString:@".mp3"] || [s containsString:@".aac"]) return @"audio";
+    if ([s containsString:@".ts?"] || [s hasSuffix:@".ts"]) return @"segment";
+    return @"progressive";
+}

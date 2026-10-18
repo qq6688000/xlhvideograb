@@ -377,7 +377,7 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
     self.table = table;
 
     UILabel *empty = [[UILabel alloc] initWithFrame:CGRectZero];
-    empty.text = @"这个页面还没抓到视频\n先播放几秒，再点「重新扫描」";
+    empty.text = @"暂时没抓到视频\n播放几秒后点「重新扫描」";
     empty.numberOfLines = 0;
     empty.textAlignment = NSTextAlignmentCenter;
     empty.textColor = [UIColor colorWithWhite:1 alpha:0.40];
@@ -457,6 +457,11 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
 }
 
 - (void)rescan {
+    if (!self.webView) {
+        [self toast:@"本页是原生播放器，播放几秒后再看"];
+        [self refreshItems];
+        return;
+    }
     [self.webView evaluateJavaScript:@"(window.__XLH_VG_SCAN__ && window.__XLH_VG_SCAN__()), 0" completionHandler:nil];
     [self toast:@"已重新扫描"];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{

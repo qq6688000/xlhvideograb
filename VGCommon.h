@@ -38,3 +38,6 @@ FOUNDATION_EXPORT NSString *VGJBPath(NSString *relative);
 FOUNDATION_EXPORT BOOL VGConfigBool(NSString *key, BOOL fallback);
 FOUNDATION_EXPORT NSString *VGConfigString(NSString *key);
 FOUNDATION_EXPORT void VGConfigReload(void);
+
+/// 按 URL 猜测媒体类型（hls/dash/audio/segment/progressive）
+FOUNDATION_EXPORT NSString *VGGuessKindString(NSString *url);

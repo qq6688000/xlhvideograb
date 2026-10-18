@@ -15,7 +15,22 @@
             "com.tencent.mtt",
             "com.operasoftware.Opera",
             "com.duckduckgo.mobile.ios",
-            "com.brave.Browser"
+            "com.ss.iphone.ugc.Aweme",
+            "com.ss.iphone.ugc.Ame",
+            "com.zhiliaoapp.musically",
+            "com.dragon.read",
+            "com.jiangjia.gif",
+            "com.kuaishou.nebula",
+            "com.xingin.discover",
+            "com.sina.weibo",
+            "com.zhihu.ios",
+            "com.tencent.xin",
+            "com.tencent.mqq",
+            "tv.danmaku.bilianime",
+            "com.google.ios.youtube",
+            "com.tencent.live4iphone",
+            "com.iqiyi.iphone",
+            "com.youku.YouKu"
         );
     };
 }
