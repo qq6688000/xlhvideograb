@@ -7,7 +7,7 @@
 #import <Foundation/Foundation.h>
 
 /// 版本号（与 control 的 Version 字段保持一致，CI 会校验）
-#define XLH_VERSION @"2.0.0"
+#define XLH_VERSION @"2.1.0"
 #import <UIKit/UIKit.h>
 
 typedef NS_ENUM(NSInteger, VGKind) {

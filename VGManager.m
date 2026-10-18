@@ -217,6 +217,10 @@ static NSHashTable *sInjectedControllers(void) {
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NSArray<NSDictionary *> *found = [[self class] scanMediaFilesInSandbox];
+        VGLogLine([NSString stringWithFormat:@"[sandbox] 扫描完成，命中 %lu 条", (unsigned long)found.count]);
+        for (NSUInteger i = 0; i < found.count && i < 5; i++) {
+            VGLogLine([NSString stringWithFormat:@"[sandbox] %@ %@", found[i][@"kind"], found[i][@"url"]]);
+        }
         if (!found.count) return;
         dispatch_async(dispatch_get_main_queue(), ^{
             for (NSDictionary *f in found) {
@@ -225,6 +229,26 @@ static NSHashTable *sInjectedControllers(void) {
             }
         });
     });
+}
+
+static NSString *VGDetectKindByMagic(NSString *path) {
+    @try {
+        NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:path];
+        if (!fh) return nil;
+        NSData *head = [fh readDataOfLength:16];
+        [fh closeFile];
+        if (head.length < 4) return nil;
+        const uint8_t *b = (const uint8_t *)head.bytes;
+        if (head.length >= 8 && memcmp(b + 4, "ftyp", 4) == 0) return @"progressive";
+        if (memcmp(b, "ID3", 3) == 0) return @"audio";
+        if (b[0] == 0xFF && (b[1] & 0xE0) == 0xE0) return @"audio";
+        if (memcmp(b, "fLaC", 4) == 0) return @"audio";
+        if (memcmp(b, "OggS", 4) == 0) return @"audio";
+        if (head.length >= 12 && memcmp(b, "RIFF", 4) == 0 && memcmp(b + 8, "WAVE", 4) == 0) return @"audio";
+        return nil;
+    } @catch (__unused NSException *e) {
+        return nil;
+    }
 }
 
 + (NSArray<NSDictionary *> *)scanMediaFilesInSandbox {
@@ -246,20 +270,24 @@ static NSHashTable *sInjectedControllers(void) {
         [roots addObject:[home stringByAppendingPathComponent:@"Documents"]];
         [roots addObject:[home stringByAppendingPathComponent:@"tmp"]];
     }
-
+    // App Group 共享容器（Telegram 媒体常存在这里）
     NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *appGroupRoot = @"/var/mobile/Containers/Shared/AppGroup";
+    if ([fm fileExistsAtPath:appGroupRoot]) {
+        [roots addObject:appGroupRoot];
+    }
+
+    VGLogLine([NSString stringWithFormat:@"[sandbox] home=%@ roots=%lu", home ?: @"?", (unsigned long)roots.count]);
+
     NSTimeInterval cutoff = [NSDate date].timeIntervalSince1970 - 86400.0;
     NSMutableArray<NSDictionary *> *hits = [NSMutableArray array];
+    // 诊断：记录每个 root 下最近修改的文件（任意类型），最多 3 条
+    NSMutableArray<NSDictionary *> *recentAny = [NSMutableArray array];
 
     for (NSString *root in roots) {
         if (![fm fileExistsAtPath:root]) continue;
         NSDirectoryEnumerator *en = [fm enumeratorAtPath:root];
         for (NSString *rel in en) {
-            NSString *ext = rel.pathExtension.lowercaseString;
-            BOOL isVideo = [videoExts containsObject:ext];
-            BOOL isAudio = [audioExts containsObject:ext];
-            if (!isVideo && !isAudio) continue;
-
             NSString *full = [root stringByAppendingPathComponent:rel];
             NSDictionary *attrs = [fm attributesOfItemAtPath:full error:nil];
             if (!attrs) continue;
@@ -269,15 +297,40 @@ static NSHashTable *sInjectedControllers(void) {
             NSDate *mtime = attrs[NSFileModificationDate];
             if (mtime.timeIntervalSince1970 < cutoff) continue;
 
+            // 诊断用：记录近期文件（不区分扩展名）
+            if (recentAny.count < 8) {
+                [recentAny addObject:@{@"path": full, @"size": @(size), @"mtime": mtime}];
+            }
+
+            NSString *ext = rel.pathExtension.lowercaseString;
+            NSString *kind = nil;
+            if ([videoExts containsObject:ext]) kind = @"progressive";
+            else if ([audioExts containsObject:ext]) kind = @"audio";
+            else {
+                // 无扩展名或未知扩展名：读文件头魔数
+                kind = VGDetectKindByMagic(full);
+            }
+            if (!kind) continue;
+
             NSString *fileURL = [NSURL fileURLWithPath:full].absoluteString;
             if (!fileURL.length) continue;
             [hits addObject:@{@"url": fileURL,
-                              @"kind": isVideo ? @"progressive" : @"audio",
+                              @"kind": kind,
                               @"size": @(size),
                               @"mtime": mtime}];
             if (hits.count >= 400) break;
         }
         if (hits.count >= 400) break;
+    }
+
+    // 诊断输出
+    [recentAny sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [(NSDate *)b[@"mtime"] compare:(NSDate *)a[@"mtime"]];
+    }];
+    for (NSUInteger i = 0; i < recentAny.count && i < 5; i++) {
+        NSDictionary *r = recentAny[i];
+        VGLogLine([NSString stringWithFormat:@"[sandbox-recent] %@ (%llu B)",
+                   r[@"path"], [r[@"size"] unsignedLongLongValue]]);
     }
 
     [hits sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
