@@ -1,23 +1,23 @@
 //
 //  VGOverlay.h
-//  悬浮按钮窗口 + 视频列表面板
+//  悬浮抓取层：直接挂在 App 自身 window 上，不做独立 UIWindow
 //
 
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
 
 @class VGMediaItem;
-@class VGOverlayViewController;
 
-@interface VGHostWindow : NSObject
+@interface VGOverlayController : NSObject
 
-@property (nonatomic, weak, readonly) UIWindowScene *scene;
-@property (nonatomic, strong, readonly) UIWindow *window;
-@property (nonatomic, strong, readonly) VGOverlayViewController *controller;
+/// 取（或创建）某个 window 对应的悬浮层，同一 window 只会有一份
++ (instancetype)controllerForWindow:(UIWindow *)window;
 
-- (instancetype)initWithScene:(UIWindowScene *)scene;
+@property (nonatomic, weak, readonly) UIWindow *window;
+@property (nonatomic, weak, readonly) WKWebView *webView;
+
 - (void)bindWebView:(WKWebView *)webView;
 - (void)showIfNeeded;
-- (void)hide;
+- (void)detach;
 
 @end

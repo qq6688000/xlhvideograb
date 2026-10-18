@@ -1,621 +1,603 @@
 //
 //  VGOverlay.m
-//  悬浮按钮 + 视频链接面板
+//  悬浮抓取层
+//
+//  设计要点：不再创建独立 UIWindow，而是把一层“穿透视图”直接加进 App
+//  自己的 window。空白区域 hitTest 返回 nil，UIKit 会继续把事件交给
+//  下层兄弟视图，因此从机制上不可能出现“整屏点不动”。
 //
 
 #import "VGOverlay.h"
+#import "VGCommon.h"
 #import "VGManager.h"
 #import "VGDownloader.h"
-#import "VGCommon.h"
+#import <objc/runtime.h>
 
-#pragma mark - 穿透视图
-// 只有按钮/面板等真实子视图接收触摸，其余区域事件穿透给下层 App
+#pragma mark - 触摸穿透容器
 
-@interface VGPassthroughView : UIView @end
+@interface VGPassthroughView : UIView
+@end
 
 @implementation VGPassthroughView
+
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *v = [super hitTest:point withEvent:event];
     return (v == self) ? nil : v;
 }
+
 @end
 
-#pragma mark - HUD
+#pragma mark - 下载进度 HUD
 
 @interface VGHUD : UIView
++ (instancetype)showInView:(UIView *)view text:(NSString *)text;
+- (void)updateFraction:(double)fraction text:(NSString *)text;
+- (void)hide;
+@end
+
+@interface VGHUD ()
 @property (nonatomic, strong) UILabel *label;
 @property (nonatomic, strong) UIProgressView *bar;
-@property (nonatomic, strong) UIView *box;
-+ (instancetype)showInView:(UIView *)view text:(NSString *)text;
-- (void)updateText:(NSString *)text progress:(double)progress;
-- (void)hide;
 @end
 
 @implementation VGHUD
 
 + (instancetype)showInView:(UIView *)view text:(NSString *)text {
     if (!view) return nil;
-    VGHUD *hud = [[VGHUD alloc] initWithFrame:view.bounds];
-    hud.userInteractionEnabled = NO;
-    hud.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-
-    UIView *box = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 232, 84)];
-    box.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.92];
-    box.layer.cornerRadius = 14;
-    box.center = CGPointMake(CGRectGetMidX(view.bounds), CGRectGetMidY(view.bounds));
-    box.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin |
+    VGHUD *hud = [[VGHUD alloc] initWithFrame:CGRectMake(0, 0, 220, 84)];
+    hud.center = CGPointMake(CGRectGetMidX(view.bounds), CGRectGetMidY(view.bounds));
+    hud.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin |
                            UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-    [hud addSubview:box];
-    hud.box = box;
+    hud.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.88];
+    hud.layer.cornerRadius = 12;
+    hud.userInteractionEnabled = NO;
 
-    UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(14, 14, 204, 22)];
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(14, 16, 192, 26)];
     label.textColor = [UIColor whiteColor];
     label.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
-    label.textAlignment = NSTextAlignmentCenter;
     label.text = text;
+    label.textAlignment = NSTextAlignmentCenter;
     label.lineBreakMode = NSLineBreakByTruncatingMiddle;
-    [box addSubview:label];
+    [hud addSubview:label];
     hud.label = label;
 
-    UIProgressView *bar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
-    bar.frame = CGRectMake(16, 50, 200, 4);
-    bar.progressTintColor = [UIColor systemBlueColor];
-    bar.trackTintColor = [UIColor colorWithWhite:1 alpha:0.22];
-    [box addSubview:bar];
+    UIProgressView *bar = [[UIProgressView alloc] initWithFrame:CGRectMake(14, 56, 192, 4)];
+    bar.progressTintColor = [UIColor colorWithRed:0.30 green:0.85 blue:0.55 alpha:1.0];
+    bar.trackTintColor = [UIColor colorWithWhite:1 alpha:0.18];
+    [hud addSubview:bar];
     hud.bar = bar;
 
     [view addSubview:hud];
-    hud.alpha = 0;
-    [UIView animateWithDuration:0.15 animations:^{ hud.alpha = 1; }];
     return hud;
 }
 
-- (void)updateText:(NSString *)text progress:(double)progress {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (text.length) self.label.text = text;
-        if (progress < 0) {
-            self.bar.hidden = YES;
-        } else {
-            self.bar.hidden = NO;
-            [self.bar setProgress:(float)MAX(0, MIN(1, progress)) animated:YES];
-        }
-    });
+- (void)updateFraction:(double)fraction text:(NSString *)text {
+    if (text.length) self.label.text = text;
+    if (fraction >= 0) [self.bar setProgress:(float)MIN(1.0, MAX(0.0, fraction)) animated:YES];
 }
 
 - (void)hide {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [UIView animateWithDuration:0.2 animations:^{ self.alpha = 0; } completion:^(BOOL f) {
-            [self removeFromSuperview];
-        }];
-    });
+    [UIView animateWithDuration:0.2 animations:^{ self.alpha = 0; } completion:^(BOOL done) {
+        [self removeFromSuperview];
+    }];
 }
+
 @end
 
-#pragma mark - 面板控制器
+#pragma mark - 悬浮层
 
-@interface VGOverlayViewController : UIViewController <UITableViewDataSource, UITableViewDelegate>
+static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
+
+@interface VGOverlayController () <UITableViewDataSource, UITableViewDelegate>
+
+@property (nonatomic, weak) UIWindow *window;
 @property (nonatomic, weak) WKWebView *webView;
+
+@property (nonatomic, strong) VGPassthroughView *root;
 @property (nonatomic, strong) UIButton *fab;
+
 @property (nonatomic, strong) UIView *dim;
 @property (nonatomic, strong) UIView *panel;
 @property (nonatomic, strong) UITableView *table;
 @property (nonatomic, strong) UILabel *summary;
+@property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, strong) UIButton *closeButton;
+@property (nonatomic, strong) UIButton *scanButton;
+
 @property (nonatomic, strong) NSArray<VGMediaItem *> *items;
 @property (nonatomic, assign) BOOL panelVisible;
-@property (nonatomic, strong) UIButton *panelCloseButton;
-@property (nonatomic, strong) UIButton *scanButton;
-@property (nonatomic, strong) UILabel *hintLabel;
+@property (nonatomic, assign) BOOL dragging;
 
-- (void)setupFAB;
-- (void)layoutFABIfNeeded;
-- (void)layoutPanel;
-- (NSString *)fabPositionKey;
-- (void)handlePan:(UIPanGestureRecognizer *)g;
-- (void)snapFAB;
-- (void)handleLongPress:(UILongPressGestureRecognizer *)g;
-- (void)fabTapped;
-- (void)buildPanelIfNeeded;
-- (void)showPanel;
-- (void)hidePanel;
-- (void)scanPage;
-- (void)onMediaChanged;
-- (void)refreshItems;
-- (UIColor *)colorForKind:(VGKind)kind;
-- (void)downloadItem:(VGMediaItem *)item;
-- (void)shareFile:(NSURL *)file;
-- (void)toast:(NSString *)text;
-- (void)presentAlert:(UIAlertController *)alert fromView:(UIView *)view;
 @end
 
-@implementation VGOverlayViewController
+@implementation VGOverlayController
 
-- (void)loadView {
-    VGPassthroughView *root = [[VGPassthroughView alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    root.backgroundColor = [UIColor clearColor];
-    self.view = root;
-}
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    [self setupFAB];
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(onMediaChanged)
-                                                 name:VGMediaDidChangeNotification
-                                               object:nil];
++ (instancetype)controllerForWindow:(UIWindow *)window {
+    if (!window) return nil;
+    VGOverlayController *c = objc_getAssociatedObject(window, kVGOverlayAssocKey);
+    if (!c) {
+        c = [VGOverlayController new];
+        c->_window = window;
+        objc_setAssociatedObject(window, kVGOverlayAssocKey, c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [c attach];
+    }
+    return c;
 }
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
-#pragma mark 悬浮按钮
+- (void)attach {
+    if (self.root) return;
+    UIWindow *w = self.window;
+    if (!w) return;
+
+    VGPassthroughView *root = [[VGPassthroughView alloc] initWithFrame:w.bounds];
+    root.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    root.backgroundColor = [UIColor clearColor];
+    root.opaque = NO;
+    [w addSubview:root];
+    self.root = root;
+
+    [self setupFAB];
+    [self layoutFAB];
+
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    [nc addObserver:self selector:@selector(onMediaChangedNote:) name:VGMediaDidChangeNotification object:nil];
+    [nc addObserver:self selector:@selector(onAppActiveNote:) name:UIApplicationDidBecomeActiveNotification object:nil];
+    [nc addObserver:self selector:@selector(onOrientationChanged:) name:UIApplicationDidChangeStatusBarOrientationNotification object:nil];
+    [nc addObserver:self selector:@selector(onOrientationChanged:) name:UIDeviceOrientationDidChangeNotification object:nil];
+}
+
+- (void)detach {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [self.root removeFromSuperview];
+    self.root = nil;
+    self.fab = nil;
+    self.panel = nil;
+    self.dim = nil;
+    self.table = nil;
+    self.panelVisible = NO;
+}
+
+#pragma mark - 对外
+
+- (void)bindWebView:(WKWebView *)webView {
+    _webView = webView;
+}
+
+- (void)showIfNeeded {
+    if (!VGConfigBool(@"enabled", YES)) {
+        [self detach];
+        return;
+    }
+    if (!self.root) [self attach];
+    if (!self.root) return;
+
+    self.root.hidden = NO;
+    [self.window bringSubviewToFront:self.root];
+
+    BOOL hiddenByUser = [[NSUserDefaults standardUserDefaults] boolForKey:@"xlgrab.fabhidden"];
+    NSString *cfg = VGConfigString(@"fab");
+    if ([cfg isEqualToString:@"1"] || [cfg isEqualToString:@"on"] || [cfg isEqualToString:@"true"]) {
+        hiddenByUser = NO;
+    } else if ([cfg isEqualToString:@"0"] || [cfg isEqualToString:@"off"] || [cfg isEqualToString:@"false"]) {
+        hiddenByUser = YES;
+    }
+    self.fab.hidden = hiddenByUser;
+}
+
+- (void)onOrientationChanged:(NSNotification *)note {
+    (void)note;
+    [self layoutFAB];
+}
+
+- (void)onAppActiveNote:(NSNotification *)note {
+    (void)note;
+    if (!self.root) return;
+    [self.window bringSubviewToFront:self.root];
+    [self layoutFAB];
+}
+
+#pragma mark - 悬浮球
 
 - (void)setupFAB {
     UIButton *fab = [UIButton buttonWithType:UIButtonTypeCustom];
     fab.frame = CGRectMake(0, 0, 54, 54);
-    fab.backgroundColor = [UIColor colorWithRed:0.13 green:0.62 blue:0.98 alpha:0.92];
+    fab.backgroundColor = [UIColor colorWithWhite:0.10 alpha:0.62];
     fab.layer.cornerRadius = 27;
+    fab.layer.borderWidth = 1.0 / [UIScreen mainScreen].scale;
+    fab.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.40].CGColor;
     fab.layer.shadowColor = [UIColor blackColor].CGColor;
-    fab.layer.shadowOpacity = 0.35;
-    fab.layer.shadowRadius = 7;
+    fab.layer.shadowOpacity = 0.28;
+    fab.layer.shadowRadius = 6;
     fab.layer.shadowOffset = CGSizeMake(0, 2);
-    fab.titleLabel.font = [UIFont boldSystemFontOfSize:21];
+    fab.accessibilityLabel = @"抓取视频";
     [fab setTitle:@"抓" forState:UIControlStateNormal];
     [fab setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    fab.titleLabel.font = [UIFont boldSystemFontOfSize:19];
     [fab addTarget:self action:@selector(fabTapped) forControlEvents:UIControlEventTouchUpInside];
 
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
     [fab addGestureRecognizer:pan];
 
-    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
-    longPress.minimumPressDuration = 0.8;
-    [fab addGestureRecognizer:longPress];
+    UILongPressGestureRecognizer *press = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
+    press.minimumPressDuration = 0.6;
+    [fab addGestureRecognizer:press];
 
-    [self.view addSubview:fab];
+    [self.root addSubview:fab];
     self.fab = fab;
 }
 
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
-    [self layoutFABIfNeeded];
-    [self layoutPanel];
-}
+- (void)layoutFAB {
+    if (!self.fab || !self.root) return;
+    CGSize b = self.root.bounds.size;
+    if (b.width < 2 || b.height < 2) return;
 
-- (void)layoutFABIfNeeded {
-    if (self.fab.tag == 20241018) return;   // 已定位
-    self.fab.tag = 20241018;
-    CGSize size = self.view.bounds.size;
-    UIEdgeInsets safe = self.view.safeAreaInsets;
-    NSString *key = [self fabPositionKey];
-    NSString *saved = [[NSUserDefaults standardUserDefaults] stringForKey:key];
-    CGPoint center = CGPointMake(size.width - 34 - safe.right, size.height * 0.62);
-    if (saved.length) {
-        NSArray *parts = [saved componentsSeparatedByString:@","];
-        if (parts.count == 2) {
-            center = CGPointMake([parts[0] doubleValue], [parts[1] doubleValue]);
-        }
+    const CGFloat size = 54;
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    CGPoint c;
+    if ([d objectForKey:@"xlgrab.fabx"] && [d objectForKey:@"xlgrab.faby"]) {
+        c = CGPointMake([d floatForKey:@"xlgrab.fabx"] * b.width,
+                        [d floatForKey:@"xlgrab.faby"] * b.height);
+    } else {
+        c = CGPointMake(b.width - size / 2 - 12, b.height - size / 2 - 96);
     }
-    center.x = MAX(34, MIN(size.width - 34, center.x));
-    center.y = MAX(60 + safe.top, MIN(size.height - 60 - safe.bottom, center.y));
-    self.fab.center = center;
-}
-
-- (NSString *)fabPositionKey {
-    NSString *bid = [NSBundle mainBundle].bundleIdentifier ?: @"app";
-    return [@"xlgrab.fabpos." stringByAppendingString:bid];
+    c.x = MAX(size / 2 + 4, MIN(b.width - size / 2 - 4, c.x));
+    c.y = MAX(size / 2 + 34, MIN(b.height - size / 2 - 24, c.y));
+    self.fab.center = c;
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)g {
-    CGPoint t = [g translationInView:self.view];
-    [g setTranslation:CGPointZero inView:self.view];
+    if (!self.fab) return;
+    CGPoint t = [g translationInView:self.root];
+    [g setTranslation:CGPointZero inView:self.root];
+    if (fabs(t.x) > 0.5 || fabs(t.y) > 0.5) self.dragging = YES;
+
+    CGSize b = self.root.bounds.size;
+    const CGFloat half = 27;
     CGPoint c = CGPointMake(self.fab.center.x + t.x, self.fab.center.y + t.y);
+    c.x = MAX(half + 4, MIN(b.width - half - 4, c.x));
+    c.y = MAX(half + 34, MIN(b.height - half - 24, c.y));
     self.fab.center = c;
+
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
         [self snapFAB];
-        [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%.0f,%.0f", self.fab.center.x, self.fab.center.y]
-                                                  forKey:[self fabPositionKey]];
+        [self saveFABPosition];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            self.dragging = NO;
+        });
     }
 }
 
 - (void)snapFAB {
-    CGSize size = self.view.bounds.size;
-    UIEdgeInsets safe = self.view.safeAreaInsets;
-    CGFloat margin = 20;
-    CGFloat x = self.fab.center.x < size.width / 2 ? (34 + safe.left + margin - 20) : (size.width - 34 - safe.right - margin + 20);
-    CGFloat y = MAX(60 + safe.top, MIN(size.height - 60 - safe.bottom, self.fab.center.y));
-    [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.5
-                        options:UIViewAnimationOptionAllowUserInteraction animations:^{
-        self.fab.center = CGPointMake(x, y);
-    } completion:^(BOOL finished) {
-        [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%.0f,%.0f", self.fab.center.x, self.fab.center.y]
-                                                  forKey:[self fabPositionKey]];
+    if (!self.fab || !self.root) return;
+    CGSize b = self.root.bounds.size;
+    const CGFloat half = 27;
+    CGFloat x = self.fab.center.x < b.width / 2 ? half + 10 : b.width - half - 10;
+    [UIView animateWithDuration:0.2 animations:^{
+        self.fab.center = CGPointMake(x, self.fab.center.y);
     }];
+}
+
+- (void)saveFABPosition {
+    if (!self.fab || !self.root) return;
+    CGSize b = self.root.bounds.size;
+    if (b.width < 2 || b.height < 2) return;
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    [d setFloat:self.fab.center.x / b.width forKey:@"xlgrab.fabx"];
+    [d setFloat:self.fab.center.y / b.height forKey:@"xlgrab.faby"];
+}
+
+- (void)fabTapped {
+    if (self.dragging) return;
+    if (self.panelVisible) [self hidePanel];
+    else [self showPanel];
 }
 
 - (void)handleLongPress:(UILongPressGestureRecognizer *)g {
-    if (g.state != UIGestureRecognizerStateBegan) return;
-    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-    [gen impactOccurred];
-
-    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"XLH 抓取" message:@"长按菜单" preferredStyle:UIAlertControllerStyleActionSheet];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"清空已抓取列表" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
-        [[VGManager shared] clearItems];
-        [self refreshItems];
-    }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"收起悬浮球（本次）" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-        self.fab.hidden = YES;
+    if (g.state != UIGestureRecognizerStateBegan || !self.fab) return;
+    UIViewController *host = [self topViewController];
+    if (!host) return;
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"悬浮球"
+                                                               message:@"隐藏后可在终端执行  xlgrab fab on  恢复"
+                                                        preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    __weak typeof(self) weakSelf = self;
+    [ac addAction:[UIAlertAction actionWithTitle:@"隐藏" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
         [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"xlgrab.fabhidden"];
+        weakSelf.fab.hidden = YES;
     }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [self presentAlert:sheet fromView:self.fab];
+    [host presentViewController:ac animated:YES completion:nil];
 }
 
-#pragma mark 面板
-
-- (void)fabTapped {
-    if (self.panelVisible) {
-        [self hidePanel];
-    } else {
-        [self showPanel];
-    }
-}
+#pragma mark - 面板
 
 - (void)buildPanelIfNeeded {
-    if (self.panel) return;
+    if (self.panel || !self.root) return;
 
-    UIView *dim = [[UIView alloc] initWithFrame:self.view.bounds];
+    UIView *dim = [[UIView alloc] initWithFrame:self.root.bounds];
     dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
     dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    dim.hidden = YES;
     [dim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(hidePanel)]];
-    [self.view addSubview:dim];
+    dim.hidden = YES;
+    [self.root addSubview:dim];
     self.dim = dim;
 
     UIView *panel = [[UIView alloc] initWithFrame:CGRectZero];
-    panel.backgroundColor = [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *tc) {
-        return tc.userInterfaceStyle == UIUserInterfaceStyleDark
-            ? [UIColor colorWithRed:0.11 green:0.11 blue:0.12 alpha:0.99]
-            : [UIColor colorWithWhite:1 alpha:0.99];
-    }];
-    panel.layer.cornerRadius = 18;
+    panel.backgroundColor = [UIColor colorWithWhite:0.10 alpha:0.97];
+    panel.layer.cornerRadius = 14;
     panel.layer.masksToBounds = YES;
-    panel.layer.shadowColor = [UIColor blackColor].CGColor;
-    panel.layer.shadowOpacity = 0.3;
-    panel.layer.shadowRadius = 16;
-    panel.layer.shadowOffset = CGSizeMake(0, 6);
     panel.hidden = YES;
-    [self.view addSubview:panel];
+    [self.root addSubview:panel];
     self.panel = panel;
 
-    // 标题
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(16, 14, 200, 22)];
-    title.text = @"网页视频抓取";
-    title.font = [UIFont boldSystemFontOfSize:17];
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(14, 0, 180, 44)];
+    title.text = @"抓到的视频";
+    title.textColor = [UIColor whiteColor];
+    title.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
     [panel addSubview:title];
 
-    UILabel *summary = [[UILabel alloc] initWithFrame:CGRectMake(16, 36, 240, 16)];
-    summary.font = [UIFont systemFontOfSize:11];
-    summary.textColor = [UIColor secondaryLabelColor];
-    summary.text = @"点右上「扫描」重新抓取";
-    [panel addSubview:summary];
-    self.summary = summary;
-
-    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
-    close.frame = CGRectMake(0, 0, 44, 44);
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
     [close setTitle:@"✕" forState:UIControlStateNormal];
-    close.titleLabel.font = [UIFont systemFontOfSize:19];
+    [close setTitleColor:[UIColor colorWithWhite:1 alpha:0.65] forState:UIControlStateNormal];
+    close.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
     [close addTarget:self action:@selector(hidePanel) forControlEvents:UIControlEventTouchUpInside];
     [panel addSubview:close];
-    self.panelCloseButton = close;
+    self.closeButton = close;
 
-    UIButton *scan = [UIButton buttonWithType:UIButtonTypeSystem];
-    scan.frame = CGRectMake(0, 0, 60, 30);
-    [scan setTitle:@"扫描" forState:UIControlStateNormal];
-    scan.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
-    scan.backgroundColor = [[UIColor systemBlueColor] colorWithAlphaComponent:0.14];
-    scan.layer.cornerRadius = 8;
-    [scan addTarget:self action:@selector(scanPage) forControlEvents:UIControlEventTouchUpInside];
+    UIButton *scan = [UIButton buttonWithType:UIButtonTypeCustom];
+    [scan setTitle:@"重新扫描" forState:UIControlStateNormal];
+    [scan setTitleColor:[UIColor colorWithRed:0.35 green:0.85 blue:0.60 alpha:1.0] forState:UIControlStateNormal];
+    scan.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    scan.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor;
+    scan.layer.borderWidth = 1;
+    scan.layer.cornerRadius = 15;
+    [scan addTarget:self action:@selector(rescan) forControlEvents:UIControlEventTouchUpInside];
     [panel addSubview:scan];
     self.scanButton = scan;
 
+    UILabel *summary = [[UILabel alloc] initWithFrame:CGRectZero];
+    summary.textColor = [UIColor colorWithWhite:1 alpha:0.50];
+    summary.font = [UIFont systemFontOfSize:11];
+    summary.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    [panel addSubview:summary];
+    self.summary = summary;
+
     UITableView *table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     table.backgroundColor = [UIColor clearColor];
-    table.separatorStyle = UITableViewCellSeparatorStyleNone;
+    table.separatorColor = [UIColor colorWithWhite:1 alpha:0.08];
+    table.rowHeight = 62;
     table.dataSource = self;
     table.delegate = self;
-    table.rowHeight = 64;
+    table.indicatorStyle = UIScrollViewIndicatorStyleWhite;
+    table.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
     [panel addSubview:table];
     self.table = table;
 
-    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectZero];
-    hint.font = [UIFont systemFontOfSize:10];
-    hint.textColor = [UIColor tertiaryLabelColor];
-    hint.numberOfLines = 2;
-    hint.text = @"blob:/ 加密 DRM 流无法直接下载；m3u8 会解析并合并为 .ts 文件后弹出分享";
-    [panel addSubview:hint];
-    self.hintLabel = hint;
-}
-
-- (void)showPanel {
-    [self buildPanelIfNeeded];
-    self.panelVisible = YES;
-    [self refreshItems];
-    [self layoutPanel];
-    [self scanPage];
-
-    self.dim.hidden = NO;
-    self.panel.hidden = NO;
-    self.dim.alpha = 0;
-    self.panel.alpha = 0;
-    self.panel.transform = CGAffineTransformMakeScale(0.96, 0.96);
-    [UIView animateWithDuration:0.2 animations:^{
-        self.dim.alpha = 1;
-        self.panel.alpha = 1;
-        self.panel.transform = CGAffineTransformIdentity;
-    }];
-    self.fab.hidden = YES;
-}
-
-- (void)hidePanel {
-    if (!self.panelVisible) return;
-    self.panelVisible = NO;
-    [UIView animateWithDuration:0.18 animations:^{
-        self.dim.alpha = 0;
-        self.panel.alpha = 0;
-        self.panel.transform = CGAffineTransformMakeScale(0.96, 0.96);
-    } completion:^(BOOL finished) {
-        self.dim.hidden = YES;
-        self.panel.hidden = YES;
-        self.panel.transform = CGAffineTransformIdentity;
-        self.fab.hidden = NO;
-    }];
+    UILabel *empty = [[UILabel alloc] initWithFrame:CGRectZero];
+    empty.text = @"这个页面还没抓到视频\n先播放几秒，再点「重新扫描」";
+    empty.numberOfLines = 0;
+    empty.textAlignment = NSTextAlignmentCenter;
+    empty.textColor = [UIColor colorWithWhite:1 alpha:0.40];
+    empty.font = [UIFont systemFontOfSize:12];
+    empty.hidden = YES;
+    [panel addSubview:empty];
+    self.emptyLabel = empty;
 }
 
 - (void)layoutPanel {
-    if (!self.panel) return;
-    CGSize size = self.view.bounds.size;
-    UIEdgeInsets safe = self.view.safeAreaInsets;
-    CGFloat w = MIN(size.width - 24 - safe.left - safe.right, 560);
-    CGFloat h = MIN(size.height - safe.top - safe.bottom - 40, 520);
-    CGFloat x = (size.width - w) / 2;
-    CGFloat y = MAX(safe.top + 20, (size.height - h) / 2 - 20);
+    if (!self.panel || !self.root) return;
+    CGSize b = self.root.bounds.size;
+    CGFloat w = MIN(360, b.width - 24);
+    CGFloat h = MIN(460, b.height - 140);
+    if (w < 200 || h < 200) return;
+    CGFloat x = (b.width - w) / 2;
+    CGFloat y = (b.height - h) / 2;
     self.panel.frame = CGRectMake(x, y, w, h);
-    self.dim.frame = self.view.bounds;
 
-    self.panelCloseButton.frame = CGRectMake(w - 44, 6, 44, 44);
-    self.scanButton.frame = CGRectMake(w - 44 - 68, 12, 60, 30);
-    self.table.frame = CGRectMake(0, 56, w, h - 56 - 34);
-    self.hintLabel.frame = CGRectMake(14, h - 32, w - 28, 24);
+    const CGFloat headerH = 44;
+    const CGFloat pad = 12;
+    self.closeButton.frame = CGRectMake(w - 44, 0, 44, 44);
+    self.scanButton.frame = CGRectMake(w - 76 - 50, (headerH - 30) / 2, 76, 30);
+    self.summary.frame = CGRectMake(pad, headerH - 2, w - pad * 2, 16);
+    CGFloat tableY = headerH + 16;
+    self.table.frame = CGRectMake(0, tableY, w, h - tableY - 8);
+    self.emptyLabel.frame = CGRectMake(pad, tableY + 44, w - pad * 2, 60);
 }
 
-#pragma mark 抓取
+- (void)showPanel {
+    if (!self.root) return;
+    [self buildPanelIfNeeded];
+    [self layoutPanel];
+    [self refreshItems];
 
-- (void)scanPage {
-    WKWebView *wv = self.webView;
-    if (!wv || !wv.window) wv = [[VGManager shared] activeWebView];
-    self.webView = wv;
-    if (!wv) {
-        self.summary.text = @"当前页面没有找到网页视图";
-        return;
-    }
-    self.summary.text = @"扫描中…";
-    __weak typeof(self) weakSelf = self;
-    [wv evaluateJavaScript:@"(window.__xlhCollect ? window.__xlhCollect() : '{}')"
-         completionHandler:^(id result, NSError *error) {
-        __strong typeof(weakSelf) self = weakSelf;
-        if (!self) return;
-        if ([result isKindOfClass:[NSString class]] && [result length] > 2) {
-            NSData *data = [(NSString *)result dataUsingEncoding:NSUTF8StringEncoding];
-            id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
-            if ([obj isKindOfClass:[NSDictionary class]]) {
-                NSArray *list = obj[@"items"];
-                if ([list isKindOfClass:[NSArray class]]) {
-                    for (NSDictionary *dict in list) {
-                        if ([dict isKindOfClass:[NSDictionary class]]) {
-                            [[VGManager shared] ingestPayload:dict fromWebView:wv];
-                        }
-                    }
-                }
-            }
-        }
-        [self refreshItems];
+    self.dim.hidden = NO;
+    self.panel.hidden = NO;
+    self.panel.alpha = 0;
+    self.panel.transform = CGAffineTransformMakeScale(0.95, 0.95);
+    [UIView animateWithDuration:0.18 animations:^{
+        self.panel.alpha = 1;
+        self.panel.transform = CGAffineTransformIdentity;
     }];
+    self.panelVisible = YES;
+    [self.window bringSubviewToFront:self.root];
 }
 
-- (void)onMediaChanged {
-    if (self.panelVisible) [self refreshItems];
+- (void)hidePanel {
+    if (!self.panel) { self.panelVisible = NO; return; }
+    self.panelVisible = NO;
+    [UIView animateWithDuration:0.15 animations:^{
+        self.panel.alpha = 0;
+    } completion:^(BOOL done) {
+        self.panel.hidden = YES;
+        self.dim.hidden = YES;
+    }];
 }
 
 - (void)refreshItems {
     self.items = [[VGManager shared] sortedItems];
-    NSString *pageString = self.webView.URL.absoluteString ?: @"";
-    // 分片单独计数，列表里默认只显示非分片
-    NSUInteger total = self.items.count;
-    NSUInteger real = 0;
-    for (VGMediaItem *it in self.items) if (it.kind != VGKindSegment) real++;
-    NSString *host = pageString.length ? ([NSURL URLWithString:pageString].host ?: pageString) : @"当前页";
-    self.summary.text = [NSString stringWithFormat:@"共 %lu 条（可选 %lu），来源：%@",
-                         (unsigned long)total, (unsigned long)real, host];
+
+    NSInteger total = (NSInteger)self.items.count;
+    NSInteger usable = 0;
+    for (VGMediaItem *it in self.items) {
+        if (it.kind != VGKindSegment) usable++;
+    }
+    NSString *page = self.webView.URL.absoluteString ?: @"";
+    NSString *host = page.length ? ([NSURL URLWithString:page].host ?: page) : @"当前页";
+    self.summary.text = [NSString stringWithFormat:@"共 %ld 条（可选 %ld）· %@", (long)total, (long)usable, host];
+    self.emptyLabel.hidden = (total > 0);
     [self.table reloadData];
 }
 
-#pragma mark UITableView
+- (void)onMediaChangedNote:(NSNotification *)note {
+    (void)note;
+    if (self.panelVisible) [self refreshItems];
+}
+
+- (void)rescan {
+    [self.webView evaluateJavaScript:@"(window.__XLH_VG_SCAN__ && window.__XLH_VG_SCAN__()), 0" completionHandler:nil];
+    [self toast:@"已重新扫描"];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self refreshItems];
+    });
+}
+
+#pragma mark - 表格
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return self.items.count;
+    return (NSInteger)self.items.count;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    static NSString *cid = @"vgcell";
+    static NSString *cid = @"VGMediaCell";
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:cid];
     if (!cell) {
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:cid];
         cell.backgroundColor = [UIColor clearColor];
+        cell.contentView.backgroundColor = [UIColor clearColor];
+        cell.textLabel.textColor = [UIColor whiteColor];
         cell.textLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+        cell.textLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+        cell.detailTextLabel.textColor = [UIColor colorWithWhite:1 alpha:0.48];
         cell.detailTextLabel.font = [UIFont systemFontOfSize:11];
-        cell.detailTextLabel.textColor = [UIColor secondaryLabelColor];
-        cell.selectedBackgroundView = [[UIView alloc] init];
-        cell.selectedBackgroundView.backgroundColor = [[UIColor systemBlueColor] colorWithAlphaComponent:0.1];
+        cell.detailTextLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
     }
-    VGMediaItem *item = self.items[indexPath.row];
-    cell.textLabel.text = item.displayName;
-    cell.detailTextLabel.text = item.displayDetail;
-    cell.imageView.image = nil;
-
-    UILabel *badge = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 44, 20)];
-    badge.text = item.kindName;
-    badge.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
-    badge.textAlignment = NSTextAlignmentCenter;
-    badge.textColor = [UIColor whiteColor];
-    badge.backgroundColor = [self colorForKind:item.kind];
-    badge.layer.cornerRadius = 5;
-    badge.layer.masksToBounds = YES;
-    cell.accessoryView = badge;
+    if (indexPath.row < (NSInteger)self.items.count) {
+        VGMediaItem *item = self.items[indexPath.row];
+        cell.textLabel.text = [NSString stringWithFormat:@"%@ · %@", item.kindName, item.displayName];
+        cell.detailTextLabel.text = item.displayDetail;
+    }
     return cell;
 }
 
-- (UIColor *)colorForKind:(VGKind)kind {
-    switch (kind) {
-        case VGKindHLS:         return [UIColor systemPinkColor];
-        case VGKindDASH:        return [UIColor systemPurpleColor];
-        case VGKindProgressive: return [UIColor systemBlueColor];
-        case VGKindAudio:       return [UIColor systemTealColor];
-        case VGKindSegment:     return [UIColor systemGrayColor];
-        default:                return [UIColor systemGray2Color];
-    }
-}
-
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    [tableView deselectRowAtIndexPath:indexPath animated:NO];
+    if (indexPath.row >= (NSInteger)self.items.count) return;
     VGMediaItem *item = self.items[indexPath.row];
-    UITableViewCell *cell = [tableView cellForRowAtIndexPath:indexPath];
-
-    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:item.displayName
-                                                                  message:item.url
-                                                           preferredStyle:UIAlertControllerStyleActionSheet];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"下载" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-        [self downloadItem:item];
-    }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"复制链接" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-        [UIPasteboard generalPasteboard].string = item.url;
-        [self toast:@"已复制链接"];
-    }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"用 Safari 打开" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-        NSURL *u = [NSURL URLWithString:item.url];
-        if (u) {
-            [[UIApplication sharedApplication] openURL:u options:@{} completionHandler:nil];
-        }
-    }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [self presentAlert:sheet fromView:cell];
+    [self presentActionsForItem:item cell:[tableView cellForRowAtIndexPath:indexPath]];
 }
 
-#pragma mark 下载
+#pragma mark - 条目操作
+
+- (void)presentActionsForItem:(VGMediaItem *)item cell:(UITableViewCell *)cell {
+    UIViewController *host = [self topViewController];
+    if (!host) {
+        [self toast:@"找不到可用的界面"];
+        return;
+    }
+
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"%@ · %@", item.kindName, item.displayName]
+                                                               message:item.url
+                                                        preferredStyle:UIAlertControllerStyleActionSheet];
+    if (ac.popoverPresentationController) {
+        ac.popoverPresentationController.sourceView = cell ?: self.panel;
+        ac.popoverPresentationController.sourceRect = cell ? cell.bounds
+            : CGRectMake(CGRectGetMidX(self.panel.bounds), CGRectGetMidY(self.panel.bounds), 1, 1);
+    }
+
+    __weak typeof(self) weakSelf = self;
+    [ac addAction:[UIAlertAction actionWithTitle:@"下载" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        [weakSelf downloadItem:item];
+    }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"复制链接" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        [UIPasteboard generalPasteboard].string = item.url ?: @"";
+        [weakSelf toast:@"链接已复制"];
+    }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"用浏览器打开" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        NSURL *u = [NSURL URLWithString:item.url];
+        if (u) [[UIApplication sharedApplication] openURL:u options:@{} completionHandler:nil];
+    }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [host presentViewController:ac animated:YES completion:nil];
+}
 
 - (void)downloadItem:(VGMediaItem *)item {
-    VGHUD *hud = [VGHUD showInView:self.view text:@"准备下载…"];
+    [self hidePanel];
+
     __weak typeof(self) weakSelf = self;
-    [[VGDownloader shared] downloadItem:item
-                              progress:^(double fraction, NSString *status) {
-        [hud updateText:status progress:fraction];
+    VGHUD *hud = [VGHUD showInView:self.root text:@"准备下载…"];
+    [[VGDownloader shared] downloadItem:item progress:^(double fraction, NSString *status) {
+        [hud updateFraction:fraction text:status];
     } completion:^(NSURL *file, NSError *error) {
-        __strong typeof(weakSelf) self = weakSelf;
         [hud hide];
-        if (!self) return;
         if (error || !file) {
-            [self toast:[NSString stringWithFormat:@"下载失败：%@", error.localizedDescription ?: @"未知错误"]];
+            [weakSelf toast:[NSString stringWithFormat:@"下载失败：%@", error.localizedDescription ?: @"未知错误"]];
             return;
         }
-        [self shareFile:file];
+        [weakSelf shareFile:file];
     }];
 }
 
 - (void)shareFile:(NSURL *)file {
-    UIActivityViewController *vc = [[UIActivityViewController alloc] initWithActivityItems:@[file] applicationActivities:nil];
-    if (vc.popoverPresentationController) {
-        vc.popoverPresentationController.sourceView = self.panel;
-        vc.popoverPresentationController.sourceRect = CGRectMake(self.panel.bounds.size.width / 2, self.panel.bounds.size.height / 2, 1, 1);
+    UIViewController *host = [self topViewController];
+    if (!host || !file) { [self toast:@"已保存到临时目录"]; return; }
+
+    UIActivityViewController *avc = [[UIActivityViewController alloc] initWithActivityItems:@[file] applicationActivities:nil];
+    if (avc.popoverPresentationController) {
+        avc.popoverPresentationController.sourceView = self.root;
+        avc.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(self.root.bounds), CGRectGetMidY(self.root.bounds), 1, 1);
     }
-    [self presentViewController:vc animated:YES completion:nil];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [host presentViewController:avc animated:YES completion:nil];
+    });
+}
+
+#pragma mark - 辅助
+
+- (UIViewController *)topViewController {
+    UIViewController *vc = self.window.rootViewController;
+    while (vc.presentedViewController) vc = vc.presentedViewController;
+    return vc;
 }
 
 - (void)toast:(NSString *)text {
-    UILabel *label = [[UILabel alloc] init];
-    label.text = [NSString stringWithFormat:@"  %@  ", text];
-    label.font = [UIFont systemFontOfSize:12];
+    if (!self.root || !text.length) return;
+
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.text = text;
     label.textColor = [UIColor whiteColor];
-    label.numberOfLines = 3;
+    label.font = [UIFont systemFontOfSize:12];
     label.textAlignment = NSTextAlignmentCenter;
-    label.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.92];
+    label.numberOfLines = 2;
+    label.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.90];
     label.layer.cornerRadius = 10;
     label.layer.masksToBounds = YES;
-    [label sizeToFit];
-    CGRect f = label.frame;
-    f.size.width = MIN(f.size.width + 12, self.view.bounds.size.width - 60);
-    f.size.height += 16;
-    label.frame = f;
-    label.center = CGPointMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds));
+    label.userInteractionEnabled = NO;
     label.alpha = 0;
-    [self.view addSubview:label];
-    [UIView animateWithDuration:0.2 animations:^{ label.alpha = 1; } completion:^(BOOL finished) {
-        [UIView animateWithDuration:0.3 delay:2.2 options:0 animations:^{ label.alpha = 0; } completion:^(BOOL finished2) {
+
+    CGSize b = self.root.bounds.size;
+    label.frame = CGRectMake(24, b.height - 140, b.width - 48, 40);
+    label.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleWidth;
+    [self.root addSubview:label];
+
+    [UIView animateWithDuration:0.18 animations:^{ label.alpha = 1; } completion:^(BOOL done) {
+        [UIView animateWithDuration:0.25 delay:1.6 options:0 animations:^{ label.alpha = 0; } completion:^(BOOL finished) {
             [label removeFromSuperview];
         }];
     }];
-}
-
-#pragma mark 弹窗辅助
-
-- (void)presentAlert:(UIAlertController *)alert fromView:(UIView *)view {
-    if (alert.popoverPresentationController) {
-        alert.popoverPresentationController.sourceView = view ?: self.view;
-        alert.popoverPresentationController.sourceRect = view ? view.bounds : CGRectMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds), 1, 1);
-    }
-    [self presentViewController:alert animated:YES completion:nil];
-}
-
-@end
-
-#pragma mark - 窗口宿主
-
-@interface VGHostWindow ()
-@property (nonatomic, weak) UIWindowScene *scene;
-@property (nonatomic, strong) UIWindow *window;
-@property (nonatomic, strong) VGOverlayViewController *controller;
-@end
-
-@implementation VGHostWindow
-
-- (instancetype)initWithScene:(UIWindowScene *)scene {
-    if (!scene) return nil;
-    self = [super init];
-    if (!self) return nil;
-    _scene = scene;
-
-    VGOverlayViewController *vc = [VGOverlayViewController new];
-    UIWindow *window = [[UIWindow alloc] initWithWindowScene:scene];
-    window.windowLevel = UIWindowLevelAlert + 120;
-    window.backgroundColor = [UIColor clearColor];
-    window.rootViewController = vc;
-    window.hidden = NO;
-    _window = window;
-    _controller = vc;
-    return self;
-}
-
-- (void)bindWebView:(WKWebView *)webView {
-    self.controller.webView = webView;
-}
-
-- (void)showIfNeeded {
-    if (!self.window) return;
-    BOOL hiddenByUser = [[NSUserDefaults standardUserDefaults] boolForKey:@"xlgrab.fabhidden"];
-    self.window.hidden = NO;
-    self.controller.fab.hidden = hiddenByUser;
-}
-
-- (void)hide {
-    self.window.hidden = YES;
 }
 
 @end

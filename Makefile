@@ -18,7 +18,7 @@ XLHVideoGrab_FILES := Tweak.xm \
                       VGDownloader.m \
                       VGScript.m
 
-XLHVideoGrab_CFLAGS := -fobjc-arc -O2 -Wall
+XLHVideoGrab_CFLAGS := -fobjc-arc -O2 -Wall -Wno-unused-parameter -Wno-unused-function
 XLHVideoGrab_FRAMEWORKS := Foundation UIKit WebKit CoreGraphics
 XLHVideoGrab_LIBRARIES := substrate
 

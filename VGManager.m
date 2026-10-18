@@ -32,7 +32,6 @@ static char kVGProxyKey;
 @interface VGManager ()
 @property (nonatomic, strong) NSMutableDictionary<NSString *, VGMediaItem *> *media;
 @property (nonatomic, strong) NSHashTable<WKWebView *> *webViews;
-@property (nonatomic, strong) NSMutableArray<VGHostWindow *> *hosts;   // 每个 scene 一个悬浮窗口
 @property (nonatomic, assign) BOOL started;
 - (void)start;
 - (void)trackWebView:(WKWebView *)webView;
@@ -41,7 +40,6 @@ static char kVGProxyKey;
 - (NSArray<VGMediaItem *> *)sortedItems;
 - (void)clearItems;
 - (void)attachUIForWebView:(WKWebView *)webView;
-- (VGHostWindow *)hostForScene:(UIWindowScene *)scene;
 @end
 
 @implementation VGManager
@@ -53,7 +51,6 @@ static char kVGProxyKey;
         m = [VGManager new];
         m.media = [NSMutableDictionary dictionary];
         m.webViews = [NSHashTable weakObjectsHashTable];
-        m.hosts = [NSMutableArray array];
     });
     return m;
 }
@@ -213,29 +210,15 @@ static NSHashTable *sInjectedControllers(void) {
 
 - (void)attachUIForWebView:(WKWebView *)webView {
     if (!VGConfigBool(@"enabled", YES)) return;
-    if (!webView.window) return;
-    // always_show=1 时即使页面还没加载完也先挂上按钮
-    if (!VGConfigBool(@"always_show", NO) && webView.URL == nil && !webView.isLoading) {
-        // Safari 新建标签页 URL 为 nil：先挂上，用户打开网页后即可用
-    }
 
-    VGHostWindow *host = [self hostForScene:webView.window.windowScene];
-    if (!host) return;
-    [host bindWebView:webView];
-    [host showIfNeeded];
-}
+    // 直接把悬浮层挂在 App 自己的 window 上，不再新建独立窗口
+    UIWindow *win = webView.window;
+    if (!win) return;
 
-- (VGHostWindow *)hostForScene:(UIWindowScene *)scene {
-    if (!scene) return nil;
-    for (VGHostWindow *h in self.hosts) {
-        if (h.scene == scene) return h;
-    }
-    VGHostWindow *host = [[VGHostWindow alloc] initWithScene:scene];
-    if (!host) return nil;
-    @synchronized (self.hosts) {
-        [self.hosts addObject:host];
-    }
-    return host;
+    VGOverlayController *overlay = [VGOverlayController controllerForWindow:win];
+    if (!overlay) return;
+    [overlay bindWebView:webView];
+    [overlay showIfNeeded];
 }
 
 @end

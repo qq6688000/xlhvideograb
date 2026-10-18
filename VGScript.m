@@ -172,6 +172,7 @@ static const char *kVGScript =
     "  }\n"
     "\n"
     "  try { setInterval(scanDom, 2500); } catch (e) {}\n"
+    "  try { window.__XLH_VG_SCAN__ = function () { scanDom(); scanHTML(); }; } catch (e) {}\n"
     "  try { document.addEventListener('DOMContentLoaded', scanDom); } catch (e) {}\n"
     "  try { setTimeout(scanDom, 500); } catch (e) {}\n"
     "\n"
