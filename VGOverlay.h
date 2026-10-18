@@ -7,12 +7,13 @@
 #import <WebKit/WebKit.h>
 
 @class VGMediaItem;
+@class VGOverlayViewController;
 
 @interface VGHostWindow : NSObject
 
 @property (nonatomic, weak, readonly) UIWindowScene *scene;
 @property (nonatomic, strong, readonly) UIWindow *window;
-@property (nonatomic, strong, readonly) UIViewController *controller;
+@property (nonatomic, strong, readonly) VGOverlayViewController *controller;
 
 - (instancetype)initWithScene:(UIWindowScene *)scene;
 - (void)bindWebView:(WKWebView *)webView;
