@@ -1,0 +1,5 @@
+packages/
+.theos/
+*.deb
+build.log
+.DS_Store

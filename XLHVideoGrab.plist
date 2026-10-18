@@ -1,0 +1,21 @@
+{
+    Filter = {
+        Bundles = (
+            "com.apple.mobilesafari",
+            "com.apple.SafariViewService",
+            "com.apple.WebSheet",
+            "com.apple.DocumentsApp",
+            "com.google.chrome.ios",
+            "org.mozilla.ios.Firefox",
+            "com.microsoft.edgemobile",
+            "com.brave.ios.Browser",
+            "com.alook.browser",
+            "com.quark.browser",
+            "com.ucweb.iphone.launcher",
+            "com.tencent.mtt",
+            "com.operasoftware.Opera",
+            "com.duckduckgo.mobile.ios",
+            "com.brave.Browser"
+        );
+    };
+}

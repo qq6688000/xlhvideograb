@@ -1,0 +1,52 @@
+name: Build XLHVideoGrab
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-13
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ldid (签名用)
+        run: brew install ldid || true
+
+      - name: Install Theos
+        run: |
+          export THEOS=$HOME/theos
+          git clone --recursive https://github.com/theos/theos.git "$THEOS"
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+          echo "$THEOS/bin" >> $GITHUB_PATH
+          echo "THEOS 已克隆到 $THEOS"
+
+      - name: 环境自检
+        run: |
+          echo "--- 工作目录 ---"; pwd; ls -la
+          echo "--- xcodebuild ---"; xcodebuild -version || true
+          echo "--- SDK ---"; xcrun --sdk iphoneos --show-sdk-version || true
+          echo "--- make ---"; make --version | head -1
+          echo "--- theos ---"; ls "$THEOS" | head
+
+      - name: Build rootless deb
+        run: |
+          set -o pipefail
+          make clean || true
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless 2>&1 | tee build.log
+
+      - name: Show package
+        if: always()
+        run: |
+          echo "--- packages ---"; ls -lh packages/ || true
+          echo "--- 末尾日志 ---"; tail -50 build.log || true
+
+      - name: Upload deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLHVideoGrab-deb
+          path: packages/*.deb
+          if-no-files-found: error
+          retention-days: 30

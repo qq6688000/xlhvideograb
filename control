@@ -1,0 +1,10 @@
+Package: com.xiaolihai.videograb
+Name: XLH VideoGrab
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: 悬浮球抓取网页视频链接（m3u8/mp4/mpd），支持 HLS 分片合并下载
+Maintainer: Xiaolihai AI
+Author: Xiaolihai AI
+Section: Tweaks
+Depends: firmware (>= 15.0), ellekit | mobilesubstrate
+Tag: purpose::extension
