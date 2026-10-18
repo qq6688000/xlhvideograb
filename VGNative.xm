@@ -228,9 +228,13 @@ static void VGInstallObservers(void) {
     }];
 }
 
-__attribute__((constructor)) static void VGNativeInit(void) {
+%ctor {
     @autoreleasepool {
+        %init(VGAVHooks);
+        %init(VGNetHooks);
+
         gVGKeys = [NSMutableSet set];
+
         dispatch_async(dispatch_get_main_queue(), ^{
             VGInstallObservers();
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)),
