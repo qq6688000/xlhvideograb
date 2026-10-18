@@ -5,6 +5,9 @@
 //
 
 #import <Foundation/Foundation.h>
+
+/// 版本号（与 control 的 Version 字段保持一致，CI 会校验）
+#define XLH_VERSION @"1.9.0"
 #import <UIKit/UIKit.h>
 
 typedef NS_ENUM(NSInteger, VGKind) {
@@ -50,6 +53,9 @@ FOUNDATION_EXPORT NSString *VGGuessKindString(NSString *url);
 
 /// 调试日志（写沙盒临时目录，音量上限 512KB）
 FOUNDATION_EXPORT NSString *VGLogPath(void);
+
+/// 运行时版本号（来自 XLH_VERSION）
+FOUNDATION_EXPORT NSString *VGVersionString(void);
 FOUNDATION_EXPORT void VGLogLine(NSString *line);
 /// 把内存缓冲落盘（点「日志」时才调用）
 FOUNDATION_EXPORT void VGLogDump(void);

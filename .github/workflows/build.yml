@@ -31,6 +31,16 @@ jobs:
           echo "--- make ---"; make --version | head -1
           echo "--- theos ---"; ls "$THEOS" | head
 
+      - name: 版本一致性校验
+        run: |
+          CONTROL_VER=$(awk '/^Version:/{print $2}' control)
+          HEADER_VER=$(sed -n 's/.*#define XLH_VERSION @"\([^"]*\)".*/\1/p' VGCommon.h)
+          echo "control: $CONTROL_VER / VGCommon.h: $HEADER_VER"
+          if [ "$CONTROL_VER" != "$HEADER_VER" ]; then
+            echo "::error::版本不一致：control=$CONTROL_VER，VGCommon.h=$HEADER_VER"
+            exit 1
+          fi
+
       - name: Build rootless deb
         run: |
           set -o pipefail

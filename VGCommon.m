@@ -215,13 +215,18 @@ void VGLogLine(NSString *line) {
     [gVGRingLock unlock];
 }
 
+NSString *VGVersionString(void) {
+    return XLH_VERSION;
+}
+
 void VGLogDump(void) {
     [gVGRingLock lock];
     NSString *text = [gVGRing componentsJoinedByString:@"\n"];
     NSUInteger count = gVGRing.count;
     [gVGRingLock unlock];
 
-    NSString *header = [NSString stringWithFormat:@"XLH VideoGrab 1.4.0\n设备 %@ / iOS %@\n记录 %lu 行\n---\n",
+    NSString *header = [NSString stringWithFormat:@"XLH VideoGrab %@\n设备 %@ / iOS %@\n记录 %lu 行\n---\n",
+                        VGVersionString(),
                         [[UIDevice currentDevice] model],
                         [[UIDevice currentDevice] systemVersion],
                         (unsigned long)count];
