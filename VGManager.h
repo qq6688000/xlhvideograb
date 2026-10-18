@@ -35,4 +35,8 @@ FOUNDATION_EXPORT NSString *const VGMediaDidChangeNotification;
 
 - (void)start;
 
+/// 原生层探测次数（用于判断播放器有没有被挂上）
+@property (nonatomic, assign, readonly) NSInteger nativeProbes;
+- (void)countNativeProbe;
+
 @end

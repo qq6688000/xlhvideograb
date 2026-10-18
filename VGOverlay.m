@@ -446,8 +446,24 @@ static const void *kVGOverlayAssocKey = &kVGOverlayAssocKey;
     }
     NSString *page = self.webView.URL.absoluteString ?: @"";
     NSString *host = page.length ? ([NSURL URLWithString:page].host ?: page) : @"当前页";
-    self.summary.text = [NSString stringWithFormat:@"共 %ld 条（可选 %ld）· %@", (long)total, (long)usable, host];
-    self.emptyLabel.hidden = (total > 0);
+    NSInteger probes = [VGManager shared].nativeProbes;
+    if (probes > 0) {
+        self.summary.text = [NSString stringWithFormat:@"%ld 条 · 播放器探测 %ld · %@", (long)total, (long)probes, host];
+    } else {
+        self.summary.text = [NSString stringWithFormat:@"%ld 条 · %@", (long)total, host];
+    }
+    (void)usable;
+
+    if (total > 0) {
+        self.emptyLabel.hidden = YES;
+    } else {
+        self.emptyLabel.hidden = NO;
+        if (probes > 0) {
+            self.emptyLabel.text = @"播放器已触发，但没取到地址\n（可能是 DRM / 复合资源）\n试试先播放 3 秒再回来";
+        } else {
+            self.emptyLabel.text = @"播放器尚未触发\n播放几秒后点「重新扫描」";
+        }
+    }
     [self.table reloadData];
 }
 

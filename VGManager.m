@@ -42,6 +42,7 @@ static char kVGProxyKey;
 - (void)attachUIForWebView:(WKWebView *)webView;
 - (void)onAppActive;
 - (UIWindow *)keyWindow;
+@property (nonatomic, assign, readwrite) NSInteger nativeProbes;
 @end
 
 @implementation VGManager
@@ -80,6 +81,12 @@ static char kVGProxyKey;
             [self attachUIForWebView:[self activeWebView]];
         });
     }
+}
+
+- (void)countNativeProbe {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.nativeProbes = self.nativeProbes + 1;
+    });
 }
 
 - (UIWindow *)keyWindow {
